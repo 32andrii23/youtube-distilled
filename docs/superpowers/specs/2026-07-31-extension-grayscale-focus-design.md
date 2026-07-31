@@ -47,6 +47,22 @@ One pure function owns the math:
 Keeping it pure is what makes it testable — the DOM side stays dumb enough that
 it only assigns the four results to four elements' styles.
 
+It lives in `extension/geometry.js` as an ES module rather than inline in
+`content.js`, because `content.js` is a classic script with no exports and so
+nothing in it can be reached from a test. `content.js` picks the module up with a
+dynamic `import(chrome.runtime.getURL("geometry.js"))` on the first toggle, and
+`geometry.js` joins `web_accessible_resources` in the manifest.
+
+That is a deliberate exception to the "this file deliberately imports nothing"
+note at the top of `content.js`, and the note is amended to say why. The
+alternative — a second copy of the math inside `content.js`, tested through the
+module — is the duplication-plus-drift-test pattern used for `theme.js` and
+`markdown.js`, but those duplicate across two surfaces that genuinely cannot
+share code. Two copies inside one extension have no such excuse.
+
+Loading lazily rather than at startup keeps this off the page-load path. Nothing
+needs the geometry until the user clicks the button.
+
 The rect is read through the machinery `content.js` already runs: the existing
 `ResizeObserver` and the `scheduleSync` / `requestAnimationFrame` coalescing at
 `content.js:493`. Scroll is added as a further trigger for the same scheduler,
@@ -66,6 +82,17 @@ on every `refresh()`, so a reload or an SPA navigation to the next video comes
 back gray without the user re-clicking.
 
 ## Surfaces
+
+This is the *third* button in a row whose first two have not landed on the
+extension yet. `extension/theme.js` exists, but nothing imports it, and
+`panel.html` still carries the plain gear. The theme toggle and the provider-mark
+trigger come from the in-flight
+[dark mode and model picker](2026-07-31-dark-mode-and-model-picker-design.md)
+work, and this button assumes they arrive first.
+
+If they have not, the grayscale button is simply the second control in the header
+and slides left when they do. Nothing here depends on their internals — only on
+the header being a flex row of round icon buttons, which it already is.
 
 **`extension/panel.html`** — a third `icon-button` in the header row, after the
 theme toggle and the provider-mark trigger. `aria-pressed` carries the state;
@@ -93,7 +120,8 @@ the player's rect. The red progress bar staying red is the intended reading of
 ## Testing
 
 `tests/grayscale-strips.test.ts` (node:test, matching
-`tests/player-position.test.ts`) covers `grayscaleStrips`: a centered player, a
+`tests/player-position.test.ts`) imports `extension/geometry.js` and covers
+`grayscaleStrips`: a centered player, a
 player flush against each viewport edge, a player filling the viewport (all four
 strips zero-sized), and a player scrolled partly out of view.
 
