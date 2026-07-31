@@ -35,6 +35,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Separator } from "@/components/ui/separator"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
+import MermaidDiagram from "@/src/MermaidDiagram"
 import { nearestPlayerCorner, type PlayerCorner } from "@/src/player-position"
 import { linkifyTimecodes } from "@/src/timecodes"
 
@@ -253,6 +254,13 @@ function BriefMarkdown({
           }
 
           return <a href={href} target="_blank" rel="noreferrer">{children}</a>
+        },
+        code: ({ className, children, ...props }) => {
+          if (className === "language-mermaid") {
+            return <MermaidDiagram source={String(children).trimEnd()} onTimecode={onTimecode} />
+          }
+
+          return <code className={className} {...props}>{children}</code>
         },
       }}
     >
