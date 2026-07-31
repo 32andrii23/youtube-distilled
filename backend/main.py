@@ -6,6 +6,7 @@ import shutil
 import signal
 import tempfile
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -15,7 +16,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from backend.prompt import build_prompt
+from backend.prompt import build_followup_prompt, build_prompt
 from backend.youtube import VideoContext, fetch_video_context
 
 
@@ -93,6 +94,31 @@ MODEL_CATALOG = {
 }
 analysis_lock = asyncio.Lock()
 
+# Follow-ups answer from the transcript the analysis already fetched, so it is
+# held here rather than fetched again per question. In memory and process-local
+# on purpose: the app promises that analysis sessions are not persisted. Bounded
+# because the web app and the extension panel can sit on different videos.
+CONTEXT_CACHE_LIMIT = 4
+context_cache: OrderedDict[str, VideoContext] = OrderedDict()
+
+
+def video_id_from_url(video_url: str) -> str:
+    return parse_qs(urlparse(video_url).query)["v"][0]
+
+
+def remember_context(video_id: str, context: VideoContext) -> None:
+    context_cache[video_id] = context
+    context_cache.move_to_end(video_id)
+    while len(context_cache) > CONTEXT_CACHE_LIMIT:
+        context_cache.popitem(last=False)
+
+
+def recall_context(video_id: str) -> VideoContext | None:
+    context = context_cache.get(video_id)
+    if context is not None:
+        context_cache.move_to_end(video_id)
+    return context
+
 
 class SummaryRequest(BaseModel):
     url: str
@@ -114,6 +140,29 @@ class SummaryResponse(BaseModel):
     model: str
     reasoning: str
     timings: list[TimingItem]
+
+
+class FollowupMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
+class FollowupRequest(BaseModel):
+    url: str
+    question: str
+    provider: Literal["codex", "claude"] = "codex"
+    model: str = "gpt-5.6-sol"
+    reasoning: str = "low"
+    summary: str = ""
+    history: list[FollowupMessage] = []
+
+
+class FollowupResponse(BaseModel):
+    answer: str
+    elapsed_seconds: int
+    provider: str
+    model: str
+    reasoning: str
 
 
 @dataclass
@@ -216,9 +265,10 @@ def diagnostic_message(stdout: bytes, stderr: bytes) -> str:
 
 async def run_codex(
     video_url: str,
-    context: VideoContext,
+    context: VideoContext | None,
     model: str,
     reasoning: str,
+    prompt: str | None = None,
 ) -> AiRunResult:
     codex_path = shutil.which("codex")
     if not codex_path:
@@ -260,7 +310,11 @@ async def run_codex(
         )
 
         analysis_started = time.monotonic()
-        stdout, stderr = await communicate(process, build_prompt(video_url, context), "Codex")
+        stdout, stderr = await communicate(
+            process,
+            prompt or build_prompt(video_url, context),
+            "Codex",
+        )
         analysis_seconds = time.monotonic() - analysis_started
 
         if process.returncode != 0:
@@ -282,9 +336,10 @@ async def run_codex(
 
 async def run_claude(
     video_url: str,
-    context: VideoContext,
+    context: VideoContext | None,
     model: str,
     reasoning: str,
+    prompt: str | None = None,
 ) -> AiRunResult:
     claude_path = shutil.which("claude")
     if not claude_path:
@@ -327,7 +382,11 @@ async def run_claude(
     )
 
     analysis_started = time.monotonic()
-    stdout, stderr = await communicate(process, build_prompt(video_url, context), "Claude")
+    stdout, stderr = await communicate(
+        process,
+        prompt or build_prompt(video_url, context),
+        "Claude",
+    )
     analysis_seconds = time.monotonic() - analysis_started
 
     if process.returncode != 0:
@@ -353,13 +412,14 @@ async def run_claude(
 async def run_provider(
     provider: str,
     video_url: str,
-    context: VideoContext,
+    context: VideoContext | None,
     model: str,
     reasoning: str,
+    prompt: str | None = None,
 ) -> AiRunResult:
     if provider == "claude":
-        return await run_claude(video_url, context, model, reasoning)
-    return await run_codex(video_url, context, model, reasoning)
+        return await run_claude(video_url, context, model, reasoning, prompt)
+    return await run_codex(video_url, context, model, reasoning, prompt)
 
 
 @app.get("/api/health")
@@ -394,10 +454,11 @@ async def summarize(request: SummaryRequest) -> SummaryResponse:
     prepared_at = time.monotonic()
     try:
         async with analysis_lock:
-            video_id = parse_qs(urlparse(video_url).query)["v"][0]
+            video_id = video_id_from_url(video_url)
             context_started = time.monotonic()
             context = await asyncio.to_thread(fetch_video_context, video_id)
             context_seconds = time.monotonic() - context_started
+            remember_context(video_id, context)
             result = await run_provider(
                 request.provider,
                 video_url,
@@ -426,4 +487,48 @@ async def summarize(request: SummaryRequest) -> SummaryResponse:
             ),
             TimingItem(label="Processing response", seconds=round(result.processing_seconds, 3)),
         ],
+    )
+
+
+@app.post("/api/followup", response_model=FollowupResponse)
+async def followup(request: FollowupRequest) -> FollowupResponse:
+    request_started = time.monotonic()
+    question = request.question.strip()
+    try:
+        video_url = normalize_youtube_url(request.url)
+        validate_model(request.provider, request.model, request.reasoning)
+        if not question:
+            raise ValueError("Ask a question about the video first.")
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+    if analysis_lock.locked():
+        raise HTTPException(status_code=429, detail="A video is already being distilled. Let it finish first.")
+
+    prompt = build_followup_prompt(
+        video_url,
+        request.summary,
+        [message.model_dump() for message in request.history],
+        question,
+        recall_context(video_id_from_url(video_url)),
+    )
+    try:
+        async with analysis_lock:
+            result = await run_provider(
+                request.provider,
+                video_url,
+                None,
+                request.model,
+                request.reasoning,
+                prompt,
+            )
+    except RuntimeError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+    return FollowupResponse(
+        answer=result.summary,
+        elapsed_seconds=max(1, round(time.monotonic() - request_started)),
+        provider=request.provider,
+        model=request.model,
+        reasoning=request.reasoning,
     )

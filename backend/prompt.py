@@ -80,16 +80,20 @@ Important:
 FOLLOWUP_PROMPT = """Answer a follow-up question about a YouTube video that was already analyzed.
 
 Rules:
-- Answer from the video itself: its transcript, captions, chapters, and the brief below.
+- Answer from the material supplied below: the brief, the conversation so far, and the transcript when one is included.
 - Reference specific timecodes whenever they help me jump straight to the moment in the video.
 - Be concise but thorough: answer the question directly and stop.
 - Do not repeat the structured brief or reuse its section headings. No preamble, no restatement of the question, no description of your process.
 - Use live web search only to clarify or verify a claim made in the video, never as a replacement for it.
-- If the video does not answer the question, say so plainly and add the closest relevant context it does offer.
+- If the supplied material does not answer the question, say so plainly and add the closest relevant context it does offer.
 - Never infer or fabricate timecodes: only cite a time supported by the supplied material. Write timecode values as plain text; the app will make them clickable.
 """
 MAX_FOLLOWUP_SUMMARY_CHARS = 14_000
 MAX_FOLLOWUP_MESSAGE_CHARS = 3_000
+MAX_FOLLOWUP_TRANSCRIPT_CHARS = 120_000
+# Six exchanges. The brief and the transcript carry the context that matters, so
+# older turns are the cheapest thing to drop when a thread runs long.
+MAX_FOLLOWUP_HISTORY_MESSAGES = 12
 
 
 def _context_block(context: VideoContext | None) -> str:
@@ -150,8 +154,12 @@ def _condense(value: str, limit: int) -> str:
 
 
 def _history_block(history: list[dict[str, str]]) -> str:
+    kept = history[-MAX_FOLLOWUP_HISTORY_MESSAGES:]
     lines: list[str] = []
-    for message in history:
+    if len(history) > len(kept):
+        lines.append("Earlier questions were dropped to keep this prompt in bounds.")
+
+    for message in kept:
         role = "Question" if message.get("role") == "user" else "Your answer"
         content = _condense(str(message.get("content", "")), MAX_FOLLOWUP_MESSAGE_CHARS)
         if content:
@@ -159,11 +167,30 @@ def _history_block(history: list[dict[str, str]]) -> str:
     return "\n\n".join(lines) if lines else "No follow-up questions have been asked yet."
 
 
+# The transcript is cached from the analysis run, so a follow-up on a brief from
+# an earlier server session will not have one. Saying so is what keeps the model
+# from citing timecodes it cannot actually see.
+def _transcript_block(context: VideoContext | None) -> str:
+    if context is None or not context.transcript:
+        return (
+            "The transcript is not available in this session. Answer from the brief and the"
+            " conversation, and only cite timecodes that appear in the brief."
+        )
+
+    caption_kind = "auto-generated" if context.transcript_generated else "creator-provided"
+    return f"""This is the transcript the analysis worked from. Auto-generated captions can contain transcription errors, so resolve obvious errors from context.
+
+--- BEGIN VIDEO TRANSCRIPT ({context.transcript_language or 'unknown language'}, {caption_kind}) ---
+{_condense(context.transcript, MAX_FOLLOWUP_TRANSCRIPT_CHARS)}
+--- END VIDEO TRANSCRIPT ---"""
+
+
 def build_followup_prompt(
     video_url: str,
     summary: str,
     history: list[dict[str, str]],
     question: str,
+    context: VideoContext | None = None,
 ) -> str:
     return f"""{FOLLOWUP_PROMPT}
 
@@ -174,6 +201,8 @@ This is the brief that was already produced for the video. Treat it as establish
 --- BEGIN VIDEO BRIEF ---
 {_condense(summary, MAX_FOLLOWUP_SUMMARY_CHARS) or "Unavailable."}
 --- END VIDEO BRIEF ---
+
+{_transcript_block(context)}
 
 --- BEGIN CONVERSATION SO FAR ---
 {_history_block(history)}
