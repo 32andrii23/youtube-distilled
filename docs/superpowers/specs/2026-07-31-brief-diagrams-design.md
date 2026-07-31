@@ -57,6 +57,27 @@ prohibition on fabricated timestamps.
 rarely supply them cleanly. The prompt says so directly: use it only when the
 video states actual numbers, never to render a vague sense of proportion.
 
+### The timeline colon rule
+
+Found while verifying the renderer, and the reason the first working diagram
+failed: in a `timeline`, a timecode cannot go to the left of the colon. Mermaid
+reads that side as the period, and `01:12 : Opening claim` fails to parse —
+quoting it does not help. `Opening claim : 01:12` parses fine, as does a
+timecode anywhere in the event text. Checked against Mermaid 11:
+
+| Form | Parses |
+| --- | --- |
+| `01:12 : Opening claim` | no |
+| `"01:12" : Opening claim` | no |
+| `Opening claim : 01:12` | yes |
+| `Opening claim : 01:12 the thesis lands` | yes |
+| `A["01:12 Gather sources"]` (flowchart) | yes |
+| `A->>B: 01:12 Opening claim` (sequence) | yes |
+
+The prompt states this as a rule with both forms spelled out, and
+`tests/test_prompt.py` asserts the rule is still there. Without it, `timeline` —
+the type most worth having — fails on nearly every diagram it produces.
+
 ## Zero is a correct answer
 
 The failure mode of any always-present visual section is filler. A model asked
