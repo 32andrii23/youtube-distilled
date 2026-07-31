@@ -261,6 +261,7 @@ async function distill() {
   }
 
   renderSettings()
+  setSettingsOpen(false)
   ui.loadingStage.textContent = LOADING_STAGES[0].label
   ui.loadingElapsed.textContent = formatElapsed(0)
   showState("running")
@@ -414,10 +415,28 @@ async function reset() {
 
 /* Wiring ----------------------------------------------------------------- */
 
-ui.settingsToggle.addEventListener("click", () => {
-  const open = ui.settings.hidden
+function setSettingsOpen(open, { restoreFocus = false } = {}) {
+  if (ui.settings.hidden === !open) return
+
   ui.settings.hidden = !open
   ui.settingsToggle.setAttribute("aria-expanded", String(open))
+  if (!open && restoreFocus) ui.settingsToggle.focus()
+}
+
+ui.settingsToggle.addEventListener("click", () => setSettingsOpen(ui.settings.hidden))
+
+// A popover has to close the way one is expected to: clicking away, or Escape.
+document.addEventListener("pointerdown", (event) => {
+  if (ui.settings.hidden) return
+  const target = event.target
+  if (target instanceof Node && ui.settings.parentElement?.contains(target)) return
+  setSettingsOpen(false)
+})
+
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || ui.settings.hidden) return
+  event.preventDefault()
+  setSettingsOpen(false, { restoreFocus: true })
 })
 
 for (const segment of document.querySelectorAll(".segment")) {

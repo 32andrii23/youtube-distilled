@@ -117,10 +117,51 @@ svg {
 
 /* Settings -------------------------------------------------------------- */
 
+/* A popover hung off the gear, as in the web app, rather than a panel that
+   pushes the content down. Aligned to the trigger's right edge. */
+.settings-anchor {
+  position: relative;
+  flex-shrink: 0;
+}
+
 .settings {
-  border-bottom: 1px solid var(--hairline);
-  background: rgb(0 0 0 / 0.015);
-  padding: 1rem var(--gutter) 1.125rem;
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 60;
+  width: max-content;
+  min-width: 260px;
+  max-width: min(320px, calc(100vw - 2.25rem));
+  border-radius: 0.75rem;
+  background: #fff;
+  box-shadow: 0 0 0 1px var(--hairline), 0 16px 50px rgb(0 0 0 / 0.12);
+  padding: 1rem;
+  text-align: left;
+  animation: settings-in 110ms ease-out;
+}
+
+.settings[hidden] {
+  display: none;
+}
+
+@keyframes settings-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings {
+    animation: none;
+  }
+}
+
+.settings-title {
+  margin: 0 0 1rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
 
 .micro-label {
@@ -133,8 +174,13 @@ svg {
   text-transform: uppercase;
 }
 
-.settings .micro-label:not(:first-child) {
-  margin-top: 1rem;
+.settings .micro-label + .segmented,
+.settings .micro-label + .field {
+  margin-bottom: 0;
+}
+
+.settings .micro-label:not(#provider-label) {
+  margin-top: 1.25rem;
 }
 
 .segmented {
@@ -143,14 +189,33 @@ svg {
 }
 
 .segment {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  height: 2.25rem;
   border: 1px solid var(--hairline);
   background: #fff;
-  padding: 0.5rem 0;
   color: var(--ink-55);
   font-family: inherit;
   font-size: 0.75rem;
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
+}
+
+.segment img {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+/* The logos ship black, so the active segment inverts them to white, exactly as
+   the web app does. */
+.segment[aria-pressed="true"] img {
+  filter: invert(1);
+}
+
+.segment:disabled img {
+  opacity: 0.5;
 }
 
 .segment:first-child {
