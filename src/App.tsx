@@ -85,6 +85,22 @@ type SummarySection = {
   content: string
 }
 
+type FollowupResponse = {
+  answer: string
+  elapsed_seconds: number
+  provider: ProviderId
+  model: string
+  reasoning: string
+}
+
+type FollowupItem = {
+  question: string
+  answer: string
+  elapsed: number
+}
+
+type FollowupState = "idle" | "running" | "error"
+
 type PlayerState = {
   seconds: number
   label: string
@@ -209,6 +225,42 @@ function getVideoId(value: string) {
   }
 }
 
+function BriefMarkdown({
+  content,
+  onTimecode,
+}: {
+  content: string
+  onTimecode: (label: string, seconds: number) => void
+}) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        a: ({ children, href }) => {
+          if (href?.startsWith("#t=")) {
+            const seconds = Number(href.slice(3))
+            const label = String(children)
+            return (
+              <Button
+                variant="link"
+                size="xs"
+                className="timecode-link h-auto min-w-0 rounded-none p-0 font-normal"
+                onClick={() => onTimecode(label, seconds)}
+              >
+                {children}
+              </Button>
+            )
+          }
+
+          return <a href={href} target="_blank" rel="noreferrer">{children}</a>
+        },
+      }}
+    >
+      {linkifyTimecodes(content)}
+    </ReactMarkdown>
+  )
+}
+
 export default function App() {
   const [url, setUrl] = useState("")
   const [state, setState] = useState<AppState>("idle")
@@ -229,6 +281,10 @@ export default function App() {
   const [providers, setProviders] = useState<ProviderCatalog>(fallbackProviders)
   const [timings, setTimings] = useState<TimingItem[]>([])
   const [resultSettings, setResultSettings] = useState<AppSettings>(defaultSettings)
+  const [followups, setFollowups] = useState<FollowupItem[]>([])
+  const [followupInput, setFollowupInput] = useState("")
+  const [followupState, setFollowupState] = useState<FollowupState>("idle")
+  const [followupError, setFollowupError] = useState("")
   const resultRef = useRef<HTMLDivElement>(null)
   const playerRef = useRef<HTMLDivElement>(null)
   const playerDragOffsetRef = useRef({ x: 0, y: 0 })
@@ -338,6 +394,10 @@ export default function App() {
     setTimingsOpen(false)
     setCopied(false)
     setSettingsOpen(false)
+    setFollowups([])
+    setFollowupInput("")
+    setFollowupState("idle")
+    setFollowupError("")
 
     try {
       const response = await fetch(`${API_URL}/api/summarize`, {
@@ -370,6 +430,50 @@ export default function App() {
     }
   }
 
+  async function askFollowup(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const question = followupInput.trim()
+    if (!question || followupState === "running") return
+
+    setFollowupState("running")
+    setFollowupError("")
+
+    try {
+      const response = await fetch(`${API_URL}/api/followup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          url: videoUrl,
+          question,
+          ...resultSettings,
+          summary,
+          history: followups.flatMap((item) => [
+            { role: "user", content: item.question },
+            { role: "assistant", content: item.answer },
+          ]),
+        }),
+      })
+      const payload = (await response.json()) as FollowupResponse & { detail?: string }
+
+      if (!response.ok) throw new Error(payload.detail || "The answer could not be generated.")
+
+      setFollowups((current) => [
+        ...current,
+        { question, answer: payload.answer, elapsed: payload.elapsed_seconds },
+      ])
+      setFollowupInput("")
+      setFollowupState("idle")
+    } catch (caughtError) {
+      const message = caughtError instanceof Error ? caughtError.message : "Something went wrong."
+      setFollowupError(
+        message === "Failed to fetch"
+          ? "The local Python service is not reachable. Restart with youtube-distilled."
+          : message,
+      )
+      setFollowupState("error")
+    }
+  }
+
   async function copySummary() {
     await navigator.clipboard.writeText(summary)
     setCopied(true)
@@ -387,6 +491,10 @@ export default function App() {
     setPlayerPosition(null)
     playerPositionRef.current = null
     setTimingsOpen(false)
+    setFollowups([])
+    setFollowupInput("")
+    setFollowupState("idle")
+    setFollowupError("")
     window.scrollTo({ top: 0, behavior: "smooth" })
   }
 
@@ -709,35 +817,81 @@ export default function App() {
                   <div>
                     <h3 className="mb-5 text-xl font-semibold tracking-[-0.025em]">{section.title}</h3>
                     <div className="summary-markdown min-w-0 overflow-x-auto">
-                      <ReactMarkdown
-                        remarkPlugins={[remarkGfm]}
-                        components={{
-                          a: ({ children, href }) => {
-                            if (href?.startsWith("#t=")) {
-                              const seconds = Number(href.slice(3))
-                              const label = String(children)
-                              return (
-                                <Button
-                                  variant="link"
-                                  size="xs"
-                                  className="timecode-link h-auto min-w-0 rounded-none p-0 font-normal"
-                                  onClick={() => playTimecode(label, seconds)}
-                                >
-                                  {children}
-                                </Button>
-                              )
-                            }
-
-                            return <a href={href} target="_blank" rel="noreferrer">{children}</a>
-                          },
-                        }}
-                      >
-                        {linkifyTimecodes(section.content)}
-                      </ReactMarkdown>
+                      <BriefMarkdown content={section.content} onTimecode={playTimecode} />
                     </div>
                   </div>
                 </article>
               ))}
+            </div>
+
+            <div className="border-t border-black/10 pt-10">
+              <h3 className="text-xl font-semibold tracking-[-0.025em]">Ask about this video</h3>
+              <p className="mt-2 max-w-xl text-sm leading-6 text-black/50">
+                Follow-ups keep this brief in context and answer with the same model that wrote it.
+              </p>
+
+              <form onSubmit={askFollowup} className="mt-5 flex flex-col gap-2 sm:flex-row">
+                <Label htmlFor="followup-question" className="sr-only">Follow-up question</Label>
+                <Input
+                  id="followup-question"
+                  value={followupInput}
+                  disabled={followupState === "running"}
+                  onChange={(event) => {
+                    setFollowupInput(event.target.value)
+                    if (followupState === "error") setFollowupState("idle")
+                  }}
+                  placeholder="What else do you want to know?"
+                  className="h-11 flex-1 rounded-md border-black/20 bg-white px-3.5 shadow-none placeholder:text-black/28 focus-visible:border-black focus-visible:ring-black/10"
+                />
+                <Button
+                  type="submit"
+                  disabled={followupState === "running" || !followupInput.trim()}
+                  className="h-11 rounded-md bg-black px-5 text-white hover:bg-black/80"
+                >
+                  {followupState !== "running" && <ArrowRight />}
+                  {followupState === "running" ? "Thinking" : "Ask"}
+                </Button>
+              </form>
+
+              {followups.length > 0 && (
+                <div className="mt-10">
+                  {followups.map((item, index) => (
+                    <article key={`${index}-${item.question}`} className="border-t border-black/8 py-8 first:border-t-0 first:pt-0">
+                      <p className="border-l-2 border-black pl-4 text-[0.95rem] font-semibold leading-7 tracking-[-0.01em]">
+                        {item.question}
+                      </p>
+                      <div className="summary-markdown mt-5 min-w-0 overflow-x-auto">
+                        <BriefMarkdown content={item.answer} onTimecode={playTimecode} />
+                      </div>
+                      <p className="mt-4 font-mono text-[10px] uppercase tracking-[0.12em] text-black/35">
+                        Answered in {formatElapsed(item.elapsed)}
+                      </p>
+                    </article>
+                  ))}
+                </div>
+              )}
+
+              {followupState === "running" && (
+                <Card size="sm" className="loading-shell mt-6 flex-row py-0" aria-live="polite">
+                  <div className="grid size-7 shrink-0 place-items-center rounded-full border border-black/10 bg-white" aria-hidden="true">
+                    <img src={providerLogos[resultSettings.provider]} alt="" className="size-3.5" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-[13px] font-medium">Working through your question</p>
+                    <p className="mt-0.5 truncate text-[11px] text-black/38">
+                      {providerLabels[resultSettings.provider]} · {resultSettings.model} · {resultSettings.reasoning}
+                    </p>
+                  </div>
+                  <div className="loading-rail" aria-hidden="true"><span /></div>
+                </Card>
+              )}
+
+              {followupState === "error" && (
+                <Alert className="mt-6 border-black/10 bg-black/[0.015] text-black/70">
+                  <CircleAlert className="size-4" />
+                  <AlertDescription className="text-black/65">{followupError}</AlertDescription>
+                </Alert>
+              )}
             </div>
           </section>
         )}
