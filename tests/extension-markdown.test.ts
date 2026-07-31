@@ -3,7 +3,7 @@ import test from "node:test"
 
 import { escapeHtml, renderMarkdown, splitSummary, timecodeToSeconds } from "../extension/markdown.js"
 import { cleanVideoTitle, formatDuration, formatElapsed, formatStepDuration } from "../extension/format.js"
-import { scaleTimings } from "../extension/mock-brief.js"
+import { isSelectableProvider, normalizeSettings } from "../extension/provider-catalog.js"
 
 test("renders headings below the section level", () => {
   assert.equal(renderMarkdown("### Concepts"), "<h3>Concepts</h3>")
@@ -142,7 +142,14 @@ test("formats a video length as a clock reading", () => {
   assert.equal(formatDuration(0), "")
 })
 
-test("scales sample timings onto the real elapsed time", () => {
-  const scaled = scaleTimings([{ label: "a", seconds: 3 }, { label: "b", seconds: 1 }], 8)
-  assert.deepEqual(scaled, [{ label: "a", seconds: 6 }, { label: "b", seconds: 2 }])
+test("normalizes settings to an available provider and its supported reasoning", () => {
+  const catalog = {
+    codex: { available: false, models: [{ id: "codex-model", reasoning: ["low"], default_reasoning: "low" }] },
+    claude: { available: true, models: [{ id: "claude-model", reasoning: ["default"], default_reasoning: "default" }] },
+  }
+  assert.deepEqual(normalizeSettings({ provider: "codex", model: "codex-model", reasoning: "high" }, catalog), {
+    provider: "claude", model: "claude-model", reasoning: "default",
+  })
+  assert.equal(isSelectableProvider(catalog, "codex"), false)
+  assert.equal(isSelectableProvider(catalog, "claude"), true)
 })

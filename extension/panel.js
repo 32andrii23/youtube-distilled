@@ -1,45 +1,24 @@
 // The side panel. Owns the state machine and all rendering.
 //
-// Two things here are real: the video reported by the content script, and
-// timecode seeking, which drives the page's own player. The brief itself is
-// sample data — see mock-brief.js.
+// Video detection and timecode seeking stay in the content script. This panel
+// owns the local API requests, settings, and rendering.
 
 import { formatDuration, formatElapsed, formatStepDuration, cleanVideoTitle } from "./format.js"
 import { renderMarkdown, splitSummary } from "./markdown.js"
-import { createMockBrief } from "./mock-brief.js"
+import { DEFAULT_SETTINGS, FALLBACK_PROVIDERS, isSelectableProvider, normalizeSettings as normalizeSettingsFromCatalog } from "./provider-catalog.js"
 
+const API_URL = "http://127.0.0.1:4322"
 const SETTINGS_KEY = "youtube-distilled-settings"
-const SIMULATED_RUN_MS = 7000
 const NOTICE_TIMEOUT_MS = 6000
-
-// Copied from MODEL_CATALOG in backend/main.py. Provider availability cannot be
-// known without the API, so both are offered in the shell.
-const MODEL_CATALOG = {
-  codex: [
-    { id: "gpt-5.6-sol", label: "GPT-5.6 Sol", reasoning: ["low", "medium", "high", "xhigh", "max"], default_reasoning: "low" },
-    { id: "gpt-5.5", label: "GPT-5.5", reasoning: ["low", "medium", "high", "xhigh"], default_reasoning: "medium" },
-    { id: "gpt-5.4", label: "GPT-5.4", reasoning: ["low", "medium", "high", "xhigh"], default_reasoning: "medium" },
-    { id: "gpt-5.4-mini", label: "GPT-5.4 Mini", reasoning: ["low", "medium", "high", "xhigh"], default_reasoning: "low" },
-  ],
-  claude: [
-    { id: "claude-sonnet-5", label: "Claude Sonnet 5", reasoning: ["low", "medium", "high", "xhigh", "max"], default_reasoning: "medium" },
-    { id: "claude-opus-5", label: "Claude Opus 5", reasoning: ["low", "medium", "high", "xhigh", "max"], default_reasoning: "high" },
-    { id: "claude-haiku-4-5", label: "Claude Haiku 4.5", reasoning: ["default"], default_reasoning: "default" },
-  ],
-}
 
 const PROVIDER_LABELS = { codex: "Codex", claude: "Claude" }
 
-const DEFAULT_SETTINGS = { provider: "codex", model: "gpt-5.6-sol", reasoning: "low" }
-
-// The app's five stage labels, as fractions of the run rather than fixed
-// seconds, because the simulated run is far shorter than a real analysis.
 const LOADING_STAGES = [
   { at: 0, label: "Opening the video context" },
-  { at: 0.08, label: "Finding transcript and chapters" },
-  { at: 0.24, label: "Analyzing the argument" },
-  { at: 0.52, label: "Selecting the moments worth watching" },
-  { at: 0.8, label: "Compressing the final brief" },
+  { at: 8, label: "Finding transcript and chapters" },
+  { at: 35, label: "Analyzing the argument" },
+  { at: 90, label: "Selecting the moments worth watching" },
+  { at: 180, label: "Compressing the final brief" },
 ]
 
 const element = (id) => document.getElementById(id)
@@ -51,6 +30,7 @@ const ui = {
     running: element("state-running"),
     success: element("state-success"),
     error: element("state-error"),
+    "service-unavailable": element("state-service-unavailable"),
   },
   settingsToggle: element("settings-toggle"),
   settings: element("settings"),
@@ -75,9 +55,12 @@ const ui = {
   sections: element("sections"),
   errorMessage: element("error-message"),
   errorReset: element("error-reset"),
+  serviceCopy: element("service-copy"),
+  serviceRetry: element("service-retry"),
 }
 
 let settings = { ...DEFAULT_SETTINGS }
+let providers = FALLBACK_PROVIDERS
 let state = "no-video"
 let currentVideo = null
 let resultVideo = null
@@ -88,23 +71,16 @@ let noticeTimer = null
 /* Settings ---------------------------------------------------------------- */
 
 function normalizeSettings(candidate) {
-  const provider = candidate?.provider === "claude" ? "claude" : "codex"
-  const models = MODEL_CATALOG[provider]
-  const model = models.find((option) => option.id === candidate?.model) ?? models[0]
-  const reasoning = model.reasoning.includes(candidate?.reasoning)
-    ? candidate.reasoning
-    : model.default_reasoning
-
-  return { provider, model: model.id, reasoning }
+  return normalizeSettingsFromCatalog(candidate, providers)
 }
 
 function selectedModel() {
-  const models = MODEL_CATALOG[settings.provider]
+  const models = providers[settings.provider]?.models ?? []
   return models.find((option) => option.id === settings.model) ?? models[0]
 }
 
 function describeSettings(source = settings) {
-  const models = MODEL_CATALOG[source.provider] ?? []
+  const models = providers[source.provider]?.models ?? []
   const model = models.find((option) => option.id === source.model)
   return `${PROVIDER_LABELS[source.provider] ?? source.provider} · ${model?.label ?? source.model} · ${source.reasoning}`
 }
@@ -127,11 +103,22 @@ function fillSelect(select, options, value) {
 
 function renderSettings() {
   for (const segment of document.querySelectorAll(".segment")) {
-    segment.setAttribute("aria-pressed", String(segment.dataset.provider === settings.provider))
+    const selectable = isSelectableProvider(providers, segment.dataset.provider)
+    segment.disabled = !selectable
+    segment.setAttribute("aria-disabled", String(!selectable))
+    segment.setAttribute("aria-pressed", String(selectable && segment.dataset.provider === settings.provider))
   }
 
   const model = selectedModel()
-  fillSelect(ui.modelSelect, MODEL_CATALOG[settings.provider], model.id)
+  fillSelect(ui.modelSelect, providers[settings.provider]?.models ?? [], model?.id)
+  if (!model) {
+    ui.modelSelect.disabled = true
+    ui.reasoningSelect.disabled = true
+    ui.idleConfig.textContent = "No provider is available on this machine."
+    ui.loadingConfig.textContent = ui.idleConfig.textContent
+    return
+  }
+  ui.modelSelect.disabled = false
   fillSelect(
     ui.reasoningSelect,
     model.reasoning.map((reasoning) => ({ id: reasoning, label: reasoning })),
@@ -173,6 +160,27 @@ function failWith(message) {
   showState("error")
 }
 
+async function loadHealth() {
+  try {
+    const response = await fetch(`${API_URL}/api/health`)
+    if (!response.ok) throw new TypeError("Service unavailable")
+    const payload = await response.json()
+    if (!payload?.providers?.codex || !payload?.providers?.claude) throw new TypeError("Service unavailable")
+
+    providers = payload.providers
+    settings = normalizeSettings(settings)
+    await saveSettings()
+    renderSettings()
+    // A successful health check clears the offline screen. refresh() leaves that
+    // state alone by design — a tab switch while the service is down must not
+    // imply it came back — so recovery has to be declared here.
+    if (state === "service-unavailable") state = "no-video"
+    await refresh()
+  } catch {
+    showServiceUnavailable()
+  }
+}
+
 /* Video detection --------------------------------------------------------- */
 
 async function probeActiveTab() {
@@ -211,7 +219,7 @@ async function refresh() {
   const video = await probeActiveTab()
   currentVideo = video
 
-  if (state === "running" || state === "success" || state === "error") return
+  if (state === "running" || state === "success" || state === "error" || state === "service-unavailable") return
   if (!video) {
     showState("no-video")
     return
@@ -225,7 +233,18 @@ function stageFor(progress) {
   return [...LOADING_STAGES].reverse().find((stage) => progress >= stage.at) ?? LOADING_STAGES[0]
 }
 
-function distill() {
+function stopRunTimer() {
+  if (!runTimer) return
+  window.clearInterval(runTimer)
+  runTimer = null
+}
+
+function showServiceUnavailable() {
+  stopRunTimer()
+  showState("service-unavailable")
+}
+
+async function distill() {
   if (!currentVideo) {
     showState("no-video")
     return
@@ -234,28 +253,48 @@ function distill() {
   const video = currentVideo
   const startedAt = Date.now()
 
+  if (!isSelectableProvider(providers, settings.provider)) {
+    failWith(`${PROVIDER_LABELS[settings.provider]} CLI is not available on this machine.`)
+    return
+  }
+
   renderSettings()
   ui.loadingStage.textContent = LOADING_STAGES[0].label
   ui.loadingElapsed.textContent = formatElapsed(0)
   showState("running")
 
   runTimer = window.setInterval(() => {
-    const elapsedMs = Date.now() - startedAt
-    ui.loadingElapsed.textContent = formatElapsed(Math.floor(elapsedMs / 1000))
-    ui.loadingStage.textContent = stageFor(elapsedMs / SIMULATED_RUN_MS).label
-
-    if (elapsedMs < SIMULATED_RUN_MS) return
-
-    window.clearInterval(runTimer)
-    runTimer = null
-    resultVideo = video
-    brief = createMockBrief({
-      videoId: video.videoId,
-      settings,
-      elapsedSeconds: elapsedMs / 1000,
-    })
-    renderResult(brief)
+    const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000)
+    ui.loadingElapsed.textContent = formatElapsed(elapsedSeconds)
+    ui.loadingStage.textContent = stageFor(elapsedSeconds).label
   }, 250)
+
+  try {
+    const response = await fetch(`${API_URL}/api/summarize`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        url: `https://www.youtube.com/watch?v=${video.videoId}`,
+        provider: settings.provider,
+        model: settings.model,
+        reasoning: settings.reasoning,
+      }),
+    })
+    const payload = await response.json()
+    if (!response.ok) throw new Error(payload.detail || "The summary could not be generated.")
+
+    stopRunTimer()
+    resultVideo = video
+    brief = payload
+    renderResult(payload)
+  } catch (error) {
+    stopRunTimer()
+    if (error instanceof TypeError) {
+      showServiceUnavailable()
+      return
+    }
+    failWith(error instanceof Error ? error.message : "Something went wrong.")
+  }
 }
 
 /* Result ----------------------------------------------------------------- */
@@ -332,10 +371,7 @@ async function seekTo(seconds) {
 }
 
 async function reset() {
-  if (runTimer) {
-    window.clearInterval(runTimer)
-    runTimer = null
-  }
+  stopRunTimer()
   brief = null
   resultVideo = null
   ui.notice.replaceChildren()
@@ -353,6 +389,7 @@ ui.settingsToggle.addEventListener("click", () => {
 
 for (const segment of document.querySelectorAll(".segment")) {
   segment.addEventListener("click", async () => {
+    if (!isSelectableProvider(providers, segment.dataset.provider)) return
     if (segment.dataset.provider === settings.provider) return
     settings = normalizeSettings({ provider: segment.dataset.provider })
     renderSettings()
@@ -375,6 +412,29 @@ ui.reasoningSelect.addEventListener("change", async () => {
 ui.distill.addEventListener("click", distill)
 ui.reset.addEventListener("click", reset)
 ui.errorReset.addEventListener("click", reset)
+
+ui.serviceCopy.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText("youtube-distilled")
+    ui.serviceCopy.textContent = "Copied"
+    window.setTimeout(() => {
+      ui.serviceCopy.textContent = "Copy"
+    }, 1500)
+  } catch {
+    // The result notice lives in the success section, which is hidden here, so
+    // the button itself has to carry the bad news.
+    ui.serviceCopy.textContent = "Copy failed"
+    window.setTimeout(() => {
+      ui.serviceCopy.textContent = "Copy"
+    }, 1500)
+  }
+})
+
+ui.serviceRetry.addEventListener("click", async () => {
+  ui.serviceRetry.disabled = true
+  await loadHealth()
+  ui.serviceRetry.disabled = false
+})
 
 ui.timingsToggle.addEventListener("click", () => {
   const open = ui.timings.hidden
@@ -416,7 +476,7 @@ async function start() {
   const stored = await chrome.storage.local.get(SETTINGS_KEY)
   settings = normalizeSettings(stored?.[SETTINGS_KEY])
   renderSettings()
-  await refresh()
+  await loadHealth()
 }
 
 start()

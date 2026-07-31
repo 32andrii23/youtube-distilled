@@ -81,11 +81,24 @@ Every brief follows the same useful structure:
 7. Critical view
 8. Final compression
 
+## Chrome extension
+
+The same brief, in a side panel next to the video. Load `extension/` unpacked at
+`chrome://extensions` — there is no build step — then open a YouTube video and
+click the toolbar icon.
+
+It talks to the same local API, so start the app first; when the service is not
+running the panel says so and offers the command to copy. Timecodes drive the
+tab's own player rather than opening a second one, so playback stays native.
+
+See [`extension/README.md`](extension/README.md) for details.
+
 ## Stack
 
 | Layer | Technology |
 |---|---|
 | Interface | React, TypeScript, Vite, Tailwind CSS, shadcn/ui |
+| Extension | Chrome MV3 side panel, plain ES modules, no build step |
 | API | Python, FastAPI, Uvicorn |
 | Video context | YouTube watch metadata and `youtube-transcript-api` |
 | Analysis | Codex CLI or Claude Code |

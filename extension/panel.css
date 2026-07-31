@@ -173,6 +173,12 @@ svg {
   color: #fff;
 }
 
+.segment:disabled {
+  color: var(--ink-40);
+  cursor: default;
+  opacity: 0.55;
+}
+
 .field {
   width: 100%;
   height: 2.25rem;
@@ -434,19 +440,6 @@ svg {
   letter-spacing: -0.04em;
 }
 
-.sample-pill {
-  flex-shrink: 0;
-  border: 1px solid var(--hairline);
-  border-radius: 999px;
-  padding: 0.2rem 0.5rem;
-  color: var(--ink-40);
-  font-family: var(--font-mono);
-  font-size: 0.5625rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  cursor: help;
-}
-
 .timings {
   margin-top: 0.75rem;
   border: 1px solid var(--hairline);
@@ -505,6 +498,41 @@ svg {
 .ghost-button:hover {
   background: var(--muted);
   color: #000;
+}
+
+/* Local service ---------------------------------------------------------- */
+
+.service-state .alert {
+  margin: 0;
+}
+
+.service-command {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  border: 1px solid var(--hairline);
+  border-radius: 0.5rem;
+  background: rgb(0 0 0 / 0.015);
+  padding: 0.35rem 0.4rem 0.35rem 0.7rem;
+}
+
+.service-command code,
+.service-help code {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+}
+
+.service-help {
+  margin: 0.6rem 0 0;
+  color: var(--ink-40);
+  font-size: 0.6875rem;
+  line-height: 1.5;
+}
+
+.service-state > .ghost-button {
+  margin-top: 0.75rem;
 }
 
 /* Sections -------------------------------------------------------------- */

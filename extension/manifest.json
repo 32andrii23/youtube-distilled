@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "description": "Distill a YouTube video into a dense brief with source-backed timecodes.",
   "permissions": ["sidePanel", "storage"],
-  "host_permissions": ["https://www.youtube.com/*"],
+  "host_permissions": ["https://www.youtube.com/*", "http://127.0.0.1:4322/*", "http://localhost:4322/*"],
   "action": {
     "default_title": "Open YouTube Distilled",
     "default_icon": {

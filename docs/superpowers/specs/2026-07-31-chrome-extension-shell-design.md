@@ -1,7 +1,11 @@
 # Chrome extension shell — design
 
 Date: 2026-07-31
-Status: approved
+Status: superseded — the shell shipped as described, then the mock was replaced
+by real calls to the local API in the same session. Where this document says the
+brief is sample data, read `extension/README.md` instead. Everything else — the
+side-panel-only surface, the no-build-step structure, the state machine, the
+style approach, and timecode seeking — still describes the code.
 
 ## Goal
 

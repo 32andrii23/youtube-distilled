@@ -13,14 +13,24 @@ the folder loads as-is.
 After changing any file, press reload on the extension card. Reopen the panel to
 pick up panel changes.
 
-## Status
+## How it works
 
-This is a frontend shell. **The brief is sample data** and is not an analysis of
-whatever video you have open — the panel labels it `Sample data` for that reason.
-It exists so the interface could be built and reviewed before the local API was
-wired in.
+The panel uses the local FastAPI service at `http://127.0.0.1:4322`. When it
+opens, it loads the available providers, models, and reasoning levels from
+`/api/health`. Distill sends the detected YouTube video URL and selected settings
+to `/api/summarize`, then renders the returned brief and timing breakdown.
 
-Two behaviours are already real:
+The local service must be running before you use the extension:
+
+```sh
+youtube-distilled
+```
+
+If that shell function is not set up, run `./scripts/start.sh` from the project
+clone instead. The panel shows this command and a Retry action whenever the
+service cannot be reached.
+
+These behaviours remain native to the browser tab:
 
 - **Video detection.** The title, channel, and length come from the page.
 - **Timecode seeking.** Clicking a timecode moves the tab's own player, so
@@ -30,24 +40,20 @@ Two behaviours are already real:
 
 | File | Role |
 | --- | --- |
-| `manifest.json` | MV3 manifest. One permission, one host. |
+| `manifest.json` | MV3 manifest, including local API host permissions. |
 | `background.js` | Opens the side panel when the toolbar icon is clicked. |
 | `content.js` | Reports the open video and seeks playback. |
 | `panel.html` | Panel markup, one section per state. |
 | `panel.css` | The app's design tokens at panel scale. |
 | `panel.js` | State machine and rendering. |
+| `provider-catalog.js` | Fallback catalog and settings normalization. |
 | `markdown.js` | Markdown subset to HTML, plus timecode linkifying. |
-| `mock-brief.js` | The sample payload. |
 | `format.js` | Duration and title formatting. |
 
-`markdown.js`, `format.js`, and `mock-brief.js` are pure and covered by
+`markdown.js`, `format.js`, and `provider-catalog.js` are pure and covered by
 `tests/extension-markdown.test.ts` in the repository root. Run them with
 `npm test`.
 
-## Wiring the API
-
-`mock-brief.js` exports a payload shaped exactly like `SummaryResponse` in
-`backend/main.py`, so replacing `createMockBrief` with a request to
-`/api/summarize` is the whole change. Add `http://127.0.0.1:4322/*` to
-`host_permissions` first — an extension page may fetch any host it has
-permission for, so the API needs no CORS change of its own.
+The extension declares `http://127.0.0.1:4322/*` and `http://localhost:4322/*`
+in `host_permissions`. Its extension-page requests therefore do not require a
+new backend CORS origin.
