@@ -129,16 +129,32 @@ two surfaces from drifting, which they already nearly have.
 
 ## The extension panel
 
-Out of scope for this pass, deliberately. Three unknowns stack up there: MV3
-forbids `unsafe-eval` and the documented workaround is a sandboxed iframe;
-whether Mermaid v11 actually needs eval is unverified; and
-`extension/markdown.js` is a hand-rolled renderer with no component hook for
-fenced code. None of that blocks the web app, and guessing at it would.
+*Drawing* diagrams in the panel is out of scope. Three unknowns stack up there:
+MV3 forbids `unsafe-eval`, the documented workaround is a sandboxed iframe, and
+whether Mermaid v11 actually needs eval is unverified. None of that blocks the
+web app, and guessing at it would. Bringing Mermaid to the panel is its own
+spec, and it starts by verifying the eval question.
 
-The panel renders a ```mermaid fence as a plain code block, which it can already
-do. That degrades honestly — the panel shows the diagram source rather than
-pretending the section is empty. Bringing Mermaid to the panel is its own spec,
-and it starts by verifying the eval question.
+*Surviving* diagrams in the panel is in scope, because the panel currently does
+neither of the two things it would need to. Both are hazards introduced by this
+feature, not pre-existing bugs:
+
+**`extension/markdown.js` has no fenced-code-block handling.** It renders inline
+code spans and nothing else, so a ` ```mermaid ` block falls through to
+`renderParagraph` and comes out as a run of broken text with literal backticks —
+and `renderInline` linkifies every timecode inside it along the way. It needs a
+fence branch that emits `<pre><code>` with the body escaped and held aside from
+inline processing.
+
+**`extractMoments` scans the whole brief as a fallback.** When the watch-guide
+section yields nothing, `extension/moments.js:150` drops to scanning every line
+of the brief for timecodes. A `timeline` diagram is dense with them, so that
+fallback would flood the YouTube seek bar with bogus moment brackets pointing at
+diagram labels. It must strip fenced blocks before the fallback scan.
+
+The panel therefore shows the diagram source in a code block. That degrades
+honestly — the source is visible rather than the section looking empty — and the
+seek bar stays truthful.
 
 ## Testing
 
@@ -148,6 +164,8 @@ and it starts by verifying the eval question.
 | `linkifyTimecodes` still links timecodes around a fence | `tests/timecodes.test.ts` |
 | Inline code spans are also skipped | `tests/timecodes.test.ts` |
 | The prompt names all six types and the five-diagram cap | `tests/test_prompt.py` (new) |
+| A fence renders as `<pre><code>` with timecodes left as text | `tests/extension-markdown.test.ts` |
+| Diagram timecodes never become watch moments | `tests/extension-moments.test.ts` |
 
 The fence-awareness tests carry the weight, because that function silently
 corrupts every diagram if it regresses and nothing else would catch it. Mermaid
