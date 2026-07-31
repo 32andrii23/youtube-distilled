@@ -10,6 +10,10 @@ const PROGRESS_CONTAINER_SELECTOR = ".ytp-progress-bar-container"
 const PROGRESS_BAR_SELECTOR = ".ytp-progress-bar"
 const STYLE_ID = "ytd-distilled-marker-styles"
 const OVERLAY_CLASS = "ytd-distilled-marker-overlay"
+const OVERLAY_HIDDEN_CLASS = "ytd-distilled-marker-overlay-hidden"
+// YouTube's own chrome fade. Matching it keeps the brackets tied to the seek bar
+// instead of appearing to float over the video on their own.
+const CHROME_FADE = "0.25s cubic-bezier(0, 0, 0.2, 1)"
 const MARKER_CLASS = "ytd-distilled-marker"
 const TICK_CLASS = "ytd-distilled-marker-tick"
 const RANGE_CLASS = "ytd-distilled-marker-range"
@@ -24,6 +28,7 @@ const momentsByVideoId = new Map()
 let activeVideoId = null
 let overlay = null
 let overlayHost = null
+let observedChrome = null
 let observedContainer = null
 let observedBar = null
 let observedPlayer = null
@@ -34,6 +39,7 @@ let syncFrame = null
 
 const resizeObserver = new ResizeObserver(() => updateOverlayGeometry())
 const mutationObserver = new MutationObserver(() => scheduleSync())
+const chromeObserver = new MutationObserver(() => syncChromeVisibility())
 
 function readVideoId() {
   const url = new URL(window.location.href)
@@ -106,7 +112,24 @@ function ensureStyles() {
       z-index: 60;
       display: block;
       overflow: visible;
+      opacity: 1;
       pointer-events: none;
+      transition: opacity ${CHROME_FADE};
+    }
+
+    /* The seek bar has gone; the brackets go with it. */
+    .${OVERLAY_HIDDEN_CLASS} {
+      opacity: 0;
+    }
+
+    .${OVERLAY_HIDDEN_CLASS} .${MARKER_CLASS} {
+      pointer-events: none;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .${OVERLAY_CLASS} {
+        transition: none;
+      }
     }
 
     /* A moment is drawn as a bracket sitting just above the seek bar rather than
@@ -352,8 +375,32 @@ function onDurationChange() {
   positionMarkers()
 }
 
+// The player carries ytp-autohide while its controls are hidden, which is the
+// same signal YouTube fades its own chrome on. The computed check behind it
+// covers the cases that hide the bar without touching that class.
+function isSeekBarVisible() {
+  if (!observedPlayer) return true
+  if (observedPlayer.classList.contains("ytp-autohide")) return false
+  if (observedPlayer.classList.contains("ytp-hide-controls")) return false
+
+  const chrome_ = observedChrome ?? observedContainer
+  if (!chrome_) return true
+
+  // Only non-animated properties are safe to read here. Opacity is the one
+  // YouTube transitions, and it is still 0 at the instant the autohide class is
+  // removed — reading it would report "hidden" during the fade back in and leave
+  // the overlay stuck that way, because nothing else would mutate to re-check.
+  const style = getComputedStyle(chrome_)
+  return style.display !== "none" && style.visibility !== "hidden"
+}
+
+function syncChromeVisibility() {
+  overlay?.classList.toggle(OVERLAY_HIDDEN_CLASS, !isSeekBarVisible())
+}
+
 function disconnectPlayer() {
   resizeObserver.disconnect()
+  chromeObserver.disconnect()
   if (observedVideo) {
     observedVideo.removeEventListener("loadedmetadata", onDurationChange)
     observedVideo.removeEventListener("durationchange", onDurationChange)
@@ -361,6 +408,7 @@ function disconnectPlayer() {
   overlay?.remove()
   overlay = null
   overlayHost = null
+  observedChrome = null
   observedContainer = null
   observedBar = null
   observedPlayer = null
@@ -385,6 +433,7 @@ function attachPlayer(container, bar, video) {
   host.append(overlay)
 
   overlayHost = host
+  observedChrome = container.closest(".ytp-chrome-bottom")
   observedContainer = container
   observedBar = bar
   observedPlayer = player
@@ -395,6 +444,14 @@ function attachPlayer(container, bar, video) {
   resizeObserver.observe(container)
   resizeObserver.observe(bar)
   if (observedPlayer) resizeObserver.observe(observedPlayer)
+
+  if (observedPlayer) {
+    chromeObserver.observe(observedPlayer, { attributes: true, attributeFilter: ["class"] })
+  }
+  if (observedChrome) {
+    chromeObserver.observe(observedChrome, { attributes: true, attributeFilter: ["class", "style"] })
+  }
+  syncChromeVisibility()
 }
 
 function syncPlayer() {

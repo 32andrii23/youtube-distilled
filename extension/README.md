@@ -41,9 +41,10 @@ These behaviours remain native to the browser tab:
   with no end. Nothing is drawn on the red bar itself, so the player's own
   chrome stays readable and seeking keeps its full precision. Hover or focus a
   marker to see why the moment matters; click it, or press Enter or Space, to
-  seek and play. Markers return if YouTube rebuilds the player or if you
-  navigate back to a video summarized in the same tab. **New** clears the
-  current brief's markers.
+  seek and play. The markers fade in and out with the player's controls, so they
+  are only on screen while the seek bar is. Markers return if YouTube rebuilds
+  the player or if you navigate back to a video summarized in the same tab.
+  **New** clears the current brief's markers.
 
 ## Files
 
