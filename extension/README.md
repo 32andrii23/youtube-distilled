@@ -36,10 +36,13 @@ These behaviours remain native to the browser tab:
 - **Timecode seeking.** Clicking a timecode moves the tab's own player, so
   playback stays native rather than opening a second video.
 - **Progress-bar moments.** After a brief finishes, its “I Only Have 10 Minutes”
-  watch guide appears as black ticks and ranges over YouTube's red seek bar.
-  Hover or focus a marker to see why the moment matters; click it, or press Enter
-  or Space, to seek and play. Markers return if YouTube rebuilds the player or
-  if you navigate back to a video summarized in the same tab. **New** clears the
+  watch guide appears just above YouTube's seek bar: a black upright at each
+  boundary, joined by a rule across the top, or a single upright for a moment
+  with no end. Nothing is drawn on the red bar itself, so the player's own
+  chrome stays readable and seeking keeps its full precision. Hover or focus a
+  marker to see why the moment matters; click it, or press Enter or Space, to
+  seek and play. Markers return if YouTube rebuilds the player or if you
+  navigate back to a video summarized in the same tab. **New** clears the
   current brief's markers.
 
 ## Files

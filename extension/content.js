@@ -1,5 +1,5 @@
 // Runs on youtube.com. It reports the open video, seeks the native player, and
-// renders distilled watch moments over YouTube's own progress bar.
+// brackets the distilled watch moments just above YouTube's own progress bar.
 //
 // Content scripts are classic scripts, so this file deliberately imports
 // nothing. Moment extraction stays in the panel; only finished plain data is
@@ -13,11 +13,17 @@ const OVERLAY_CLASS = "ytd-distilled-marker-overlay"
 const MARKER_CLASS = "ytd-distilled-marker"
 const TICK_CLASS = "ytd-distilled-marker-tick"
 const RANGE_CLASS = "ytd-distilled-marker-range"
+const SHAPE_CLASS = "ytd-distilled-marker-shape"
 const LABEL_CLASS = "ytd-distilled-marker-label"
+const MARKER_HEIGHT = 9
+// A two-pixel upright is too thin to hover, so a single timecode gets a wider
+// hit area. It sits above the bar, so the extra width costs no seek precision.
+const TICK_HIT_WIDTH = 12
 
 const momentsByVideoId = new Map()
 let activeVideoId = null
 let overlay = null
+let overlayHost = null
 let observedContainer = null
 let observedBar = null
 let observedPlayer = null
@@ -103,42 +109,68 @@ function ensureStyles() {
       pointer-events: none;
     }
 
-    /* The bar is only a few pixels tall, so a marker sized to it reads as an
-       outline rather than a black mark. Overhanging it vertically gives the
-       fill enough mass to stay unmistakably black against red and grey alike,
-       while the hairline ring keeps an edge over bright thumbnails. */
+    /* A moment is drawn as a bracket sitting just above the seek bar rather than
+       on top of it: an upright at each boundary joined by a rule across the top.
+       Nothing overlaps the red played bar or the scrubber, so YouTube's own
+       chrome stays readable and clicks on the bar are never intercepted. */
     .${MARKER_CLASS} {
       all: unset;
       box-sizing: border-box;
       position: absolute;
-      bottom: -3px;
+      bottom: calc(100% + 2px);
       z-index: 1;
       display: block;
-      height: calc(100% + 6px);
-      min-height: 11px;
-      border-radius: 1px;
-      background: #000;
-      box-shadow: 0 0 0 1px rgb(255 255 255 / 0.55), 0 0 3px rgb(0 0 0 / 0.75);
+      height: ${MARKER_HEIGHT}px;
       cursor: pointer;
       pointer-events: auto;
     }
 
+    .${SHAPE_CLASS} {
+      all: initial;
+      box-sizing: border-box;
+      position: absolute;
+      bottom: 0;
+      display: block;
+      height: 100%;
+      /* Black lines stay legible over dark footage thanks to a hairline glow,
+         which keeps the mark itself black rather than outlining it in white. */
+      filter: drop-shadow(0 0 1px rgb(255 255 255 / 0.9));
+      pointer-events: none;
+    }
+
+    /* Range: uprights at both ends, joined across the top. */
+    .${RANGE_CLASS} .${SHAPE_CLASS} {
+      left: 0;
+      width: 100%;
+      border-top: 2px solid #000;
+      border-right: 2px solid #000;
+      border-left: 2px solid #000;
+    }
+
+    /* Single timecode: one upright, centred in a wider hit area. */
     .${TICK_CLASS} {
-      width: 4px;
-      min-width: 4px;
+      width: ${TICK_HIT_WIDTH}px;
+    }
+
+    .${TICK_CLASS} .${SHAPE_CLASS} {
+      left: 50%;
+      width: 2px;
+      margin-left: -1px;
+      background: #000;
     }
 
     .${MARKER_CLASS}:hover,
     .${MARKER_CLASS}:focus-visible {
       z-index: 3;
-      bottom: -5px;
-      height: calc(100% + 10px);
-      box-shadow: 0 0 0 1px #fff, 0 0 4px rgb(0 0 0 / 0.8);
     }
 
-    .${MARKER_CLASS}:focus-visible {
-      outline: 2px solid #fff;
-      outline-offset: 2px;
+    .${MARKER_CLASS}:hover .${SHAPE_CLASS},
+    .${MARKER_CLASS}:focus-visible .${SHAPE_CLASS} {
+      height: calc(100% + 3px);
+    }
+
+    .${MARKER_CLASS}:focus-visible .${SHAPE_CLASS} {
+      filter: drop-shadow(0 0 2px #fff);
     }
 
     .${LABEL_CLASS} {
@@ -224,10 +256,15 @@ function createMarker(moment) {
   const description = describeMoment(moment)
   marker.setAttribute("aria-label", description.ariaLabel)
 
+  // The bracket is a child rather than the button's own border so the hit area
+  // can be wider than the drawn lines.
+  const shape = document.createElement("span")
+  shape.className = SHAPE_CLASS
+
   const label = document.createElement("span")
   label.className = LABEL_CLASS
   label.textContent = moment.label
-  marker.append(label)
+  marker.append(shape, label)
 
   marker.addEventListener("click", (event) => activateMarker(event, moment.startSeconds))
   marker.addEventListener("keydown", (event) => {
@@ -260,7 +297,11 @@ function positionMarkers() {
       marker.style.width = `${endPercent - startPercent}%`
       marker.style.transform = "none"
     } else {
-      marker.style.left = `clamp(0px, calc(${startPercent}% - 2px), calc(100% - 4px))`
+      // The hit area is centred on the timecode, then clamped so a moment at
+      // either extreme still sits fully inside the bar.
+      const half = TICK_HIT_WIDTH / 2
+      marker.style.left =
+        `clamp(0px, calc(${startPercent}% - ${half}px), calc(100% - ${TICK_HIT_WIDTH}px))`
       marker.style.removeProperty("width")
       marker.style.transform = "none"
     }
@@ -277,18 +318,26 @@ function renderMarkers(moments) {
 }
 
 function updateOverlayGeometry() {
-  if (!overlay || !observedContainer || !observedBar) return
-  if (!overlay.isConnected || !observedContainer.isConnected || !observedBar.isConnected) {
+  if (!overlay || !overlayHost || !observedContainer || !observedBar) return
+  if (
+    !overlay.isConnected
+    || !overlayHost.isConnected
+    || !observedContainer.isConnected
+    || !observedBar.isConnected
+  ) {
     scheduleSync()
     return
   }
 
-  const containerRect = observedContainer.getBoundingClientRect()
+  // The overlay tracks the bar's box but is positioned within its host, so the
+  // offsets are measured between the two rects and divided back out of any
+  // transform the player applies.
+  const hostRect = overlayHost.getBoundingClientRect()
   const barRect = observedBar.getBoundingClientRect()
-  const scaleX = observedContainer.offsetWidth ? containerRect.width / observedContainer.offsetWidth : 1
-  const scaleY = observedContainer.offsetHeight ? containerRect.height / observedContainer.offsetHeight : 1
-  overlay.style.left = `${(barRect.left - containerRect.left) / (scaleX || 1)}px`
-  overlay.style.top = `${(barRect.top - containerRect.top) / (scaleY || 1)}px`
+  const scaleX = overlayHost.offsetWidth ? hostRect.width / overlayHost.offsetWidth : 1
+  const scaleY = overlayHost.offsetHeight ? hostRect.height / overlayHost.offsetHeight : 1
+  overlay.style.left = `${(barRect.left - hostRect.left) / (scaleX || 1)}px`
+  overlay.style.top = `${(barRect.top - hostRect.top) / (scaleY || 1)}px`
   overlay.style.width = `${barRect.width / (scaleX || 1)}px`
   overlay.style.height = `${barRect.height / (scaleY || 1)}px`
 
@@ -311,6 +360,7 @@ function disconnectPlayer() {
   }
   overlay?.remove()
   overlay = null
+  overlayHost = null
   observedContainer = null
   observedBar = null
   observedPlayer = null
@@ -321,15 +371,23 @@ function disconnectPlayer() {
 
 function attachPlayer(container, bar, video) {
   disconnectPlayer()
-  for (const existing of container.querySelectorAll(`:scope > .${OVERLAY_CLASS}`)) existing.remove()
+
+  const player = container.closest(".html5-video-player")
+  // The brackets are drawn above the seek bar, so they would be cut off if the
+  // progress container ever clipped its overflow. Hosting them on the player
+  // itself removes that dependency; the container is only a fallback for when
+  // the player is missing or is not a positioned ancestor.
+  const host = player && getComputedStyle(player).position !== "static" ? player : container
+  for (const existing of document.querySelectorAll(`.${OVERLAY_CLASS}`)) existing.remove()
 
   overlay = document.createElement("div")
   overlay.className = OVERLAY_CLASS
-  container.append(overlay)
+  host.append(overlay)
 
+  overlayHost = host
   observedContainer = container
   observedBar = bar
-  observedPlayer = container.closest(".html5-video-player")
+  observedPlayer = player
   observedVideo = video
   video.addEventListener("loadedmetadata", onDurationChange)
   video.addEventListener("durationchange", onDurationChange)
