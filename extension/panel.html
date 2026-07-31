@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>YouTube Distilled</title>
+    <link rel="stylesheet" href="panel.css" />
+  </head>
+  <body>
+    <header class="panel-header">
+      <div class="wordmark">
+        <img src="icons/icon-32.png" alt="" width="18" height="18" aria-hidden="true" />
+        <span>YouTube Distilled</span>
+      </div>
+      <button
+        type="button"
+        id="settings-toggle"
+        class="icon-button"
+        aria-expanded="false"
+        aria-controls="settings"
+        aria-label="Settings"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M20 7h-9M14 17H5" />
+          <circle cx="17" cy="17" r="3" />
+          <circle cx="7" cy="7" r="3" />
+        </svg>
+      </button>
+    </header>
+
+    <section id="settings" class="settings" hidden>
+      <p class="micro-label">Provider</p>
+      <div class="segmented" role="group" aria-label="AI provider">
+        <button type="button" class="segment" data-provider="codex" aria-pressed="true">Codex</button>
+        <button type="button" class="segment" data-provider="claude" aria-pressed="false">Claude</button>
+      </div>
+
+      <label class="micro-label" for="model-select">Model</label>
+      <select id="model-select" class="field"></select>
+
+      <label class="micro-label" for="reasoning-select">Reasoning</label>
+      <select id="reasoning-select" class="field"></select>
+
+      <p class="settings-note">
+        Lower reasoning is faster. Each provider uses its existing local CLI login.
+      </p>
+    </section>
+
+    <main id="main" class="panel-main">
+      <!-- No video in the active tab. -->
+      <section id="state-no-video" class="state empty-state">
+        <p class="empty-title">No video open</p>
+        <p class="empty-body">Open a YouTube video in this tab, then distill it here.</p>
+      </section>
+
+      <!-- A video is detected and ready to distill. -->
+      <section id="state-idle" class="state" hidden>
+        <article class="video-card">
+          <img id="video-thumbnail" class="thumbnail" alt="" />
+          <h1 id="video-title" class="video-title"></h1>
+          <p class="video-meta">
+            <span id="video-channel"></span>
+            <span id="video-duration" class="duration"></span>
+          </p>
+        </article>
+        <button type="button" id="distill" class="primary-button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6" /></svg>
+          Distill
+        </button>
+        <p id="idle-config" class="config-line"></p>
+      </section>
+
+      <!-- The simulated run. -->
+      <section id="state-running" class="state" hidden aria-live="polite">
+        <div class="loading-shell">
+          <div class="loading-body">
+            <p id="loading-stage" class="loading-stage"></p>
+            <p id="loading-config" class="config-line"></p>
+          </div>
+          <time id="loading-elapsed" class="loading-elapsed"></time>
+          <div class="loading-rail" aria-hidden="true"><span></span></div>
+        </div>
+      </section>
+
+      <!-- The finished brief. -->
+      <section id="state-success" class="state" hidden>
+        <div class="result-header">
+          <div class="result-heading">
+            <button
+              type="button"
+              id="timings-toggle"
+              class="timings-toggle"
+              aria-expanded="false"
+              aria-controls="timings"
+            >
+              <span id="timings-label"></span>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
+            </button>
+            <h2 class="result-title">Summary</h2>
+          </div>
+          <span class="sample-pill" title="This brief is sample content, not an analysis of this video">
+            Sample data
+          </span>
+        </div>
+
+        <div id="timings" class="timings" hidden></div>
+
+        <div class="result-actions">
+          <button type="button" id="copy" class="ghost-button">Copy</button>
+          <a id="open-video" class="ghost-button" target="_blank" rel="noreferrer">Video</a>
+          <button type="button" id="reset" class="ghost-button">New</button>
+        </div>
+
+        <div id="result-notice"></div>
+        <div id="sections"></div>
+      </section>
+
+      <!-- Something failed. -->
+      <section id="state-error" class="state" hidden>
+        <div class="alert" role="alert">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 8v4M12 16h.01" />
+          </svg>
+          <p id="error-message"></p>
+        </div>
+        <button type="button" id="error-reset" class="ghost-button">Start over</button>
+      </section>
+    </main>
+
+    <script type="module" src="panel.js"></script>
+  </body>
+</html>

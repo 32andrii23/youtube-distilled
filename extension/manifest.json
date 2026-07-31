@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "YouTube Distilled",
+  "version": "0.1.0",
+  "description": "Distill a YouTube video into a dense brief with source-backed timecodes.",
+  "permissions": ["sidePanel", "storage"],
+  "host_permissions": ["https://www.youtube.com/*"],
+  "action": {
+    "default_title": "Open YouTube Distilled",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "side_panel": {
+    "default_path": "panel.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.youtube.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
