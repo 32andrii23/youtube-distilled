@@ -35,6 +35,12 @@ These behaviours remain native to the browser tab:
 - **Video detection.** The title, channel, and length come from the page.
 - **Timecode seeking.** Clicking a timecode moves the tab's own player, so
   playback stays native rather than opening a second video.
+- **Progress-bar moments.** After a brief finishes, its “I Only Have 10 Minutes”
+  watch guide appears as black ticks and ranges over YouTube's red seek bar.
+  Hover or focus a marker to see why the moment matters; click it, or press Enter
+  or Space, to seek and play. Markers return if YouTube rebuilds the player or
+  if you navigate back to a video summarized in the same tab. **New** clears the
+  current brief's markers.
 
 ## Files
 
@@ -42,17 +48,17 @@ These behaviours remain native to the browser tab:
 | --- | --- |
 | `manifest.json` | MV3 manifest, including local API host permissions. |
 | `background.js` | Opens the side panel when the toolbar icon is clicked. |
-| `content.js` | Reports the open video and seeks playback. |
+| `content.js` | Reports the open video, seeks playback, and owns progress-bar markers. |
 | `panel.html` | Panel markup, one section per state. |
 | `panel.css` | The app's design tokens at panel scale. |
 | `panel.js` | State machine and rendering. |
 | `provider-catalog.js` | Fallback catalog and settings normalization. |
 | `markdown.js` | Markdown subset to HTML, plus timecode linkifying. |
+| `moments.js` | Pure watch-guide moment extraction and label cleanup. |
 | `format.js` | Duration and title formatting. |
 
-`markdown.js`, `format.js`, and `provider-catalog.js` are pure and covered by
-`tests/extension-markdown.test.ts` in the repository root. Run them with
-`npm test`.
+`markdown.js`, `moments.js`, `format.js`, and `provider-catalog.js` are pure and
+covered by the extension tests in the repository root. Run them with `npm test`.
 
 The extension declares `http://127.0.0.1:4322/*` and `http://localhost:4322/*`
 in `host_permissions`. Its extension-page requests therefore do not require a

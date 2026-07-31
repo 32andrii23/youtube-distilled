@@ -18,7 +18,7 @@ const ESCAPE_MAP = {
 
 // Kept in step with src/timecodes.ts so both surfaces agree on what counts as a
 // timestamp. The lookbehind is what stops it matching a URL port.
-const TIMECODE_PATTERN =
+export const TIMECODE_PATTERN =
   /(?<![\w:/])((?:\d{1,2}:)?\d{1,2}:\d{2})(?:\s*[–—-]\s*((?:\d{1,2}:)?\d{1,2}:\d{2}))?/g
 const HEADING_PATTERN = /^(#{2,4})\s+(.*)$/
 const UNORDERED_ITEM_PATTERN = /^\s*[-*]\s+(.*)$/

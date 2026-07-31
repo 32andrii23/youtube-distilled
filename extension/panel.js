@@ -5,6 +5,7 @@
 
 import { formatDuration, formatElapsed, formatStepDuration, cleanVideoTitle } from "./format.js"
 import { renderMarkdown, splitSummary } from "./markdown.js"
+import { extractMoments } from "./moments.js"
 import { DEFAULT_SETTINGS, FALLBACK_PROVIDERS, isSelectableProvider, normalizeSettings as normalizeSettingsFromCatalog } from "./provider-catalog.js"
 
 const API_URL = "http://127.0.0.1:4322"
@@ -51,6 +52,7 @@ const ui = {
   copy: element("copy"),
   openVideo: element("open-video"),
   reset: element("reset"),
+  markerStatus: element("marker-status"),
   notice: element("result-notice"),
   sections: element("sections"),
   errorMessage: element("error-message"),
@@ -286,7 +288,9 @@ async function distill() {
     stopRunTimer()
     resultVideo = video
     brief = payload
-    renderResult(payload)
+    const moments = extractMoments(payload.summary)
+    renderResult(payload, moments.length)
+    await sendMoments(video, moments)
   } catch (error) {
     stopRunTimer()
     if (error instanceof TypeError) {
@@ -344,18 +348,45 @@ function renderSections(payload) {
   ui.sections.replaceChildren(...articles)
 }
 
-function renderResult(payload) {
+function renderResult(payload, momentCount) {
   ui.timingsLabel.textContent = `Ready in ${formatElapsed(payload.elapsed_seconds)}`
   ui.timings.hidden = true
   ui.timingsToggle.setAttribute("aria-expanded", "false")
   ui.openVideo.href = payload.video_url
   ui.notice.replaceChildren()
   ui.copy.textContent = "Copy"
+  ui.markerStatus.textContent = momentCount
+    ? `${momentCount} ${momentCount === 1 ? "moment" : "moments"} marked on the player.`
+    : "No watch-guide moments found for the player."
 
   renderTimings(payload)
   renderSections(payload)
   showState("success")
   window.scrollTo({ top: 0 })
+}
+
+async function sendMoments(video, moments) {
+  try {
+    await chrome.tabs.sendMessage(video.tabId, {
+      type: "set-moments",
+      videoId: video.videoId,
+      moments,
+    })
+  } catch {
+    // The brief remains useful if its original tab closed during generation.
+  }
+}
+
+async function clearMoments(video) {
+  if (!video) return
+  try {
+    await chrome.tabs.sendMessage(video.tabId, {
+      type: "clear-moments",
+      videoId: video.videoId,
+    })
+  } catch {
+    // The tab may have closed or navigated away since the result was made.
+  }
 }
 
 async function seekTo(seconds) {
@@ -371,11 +402,13 @@ async function seekTo(seconds) {
 }
 
 async function reset() {
+  const markerVideo = resultVideo
   stopRunTimer()
   brief = null
   resultVideo = null
   ui.notice.replaceChildren()
   showState("no-video")
+  await clearMoments(markerVideo)
   await refresh()
 }
 
