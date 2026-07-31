@@ -137,3 +137,36 @@ test("drops moments that have no explanatory label", () => {
 
   assert.deepEqual(extractMoments(brief), [])
 })
+
+test("ignores timecodes inside a diagram when falling back to the whole brief", () => {
+  const markdown = [
+    "## 9. Diagrams",
+    "",
+    "```mermaid",
+    "timeline",
+    "  Opening claim : 01:00",
+    "  Counterexample : 02:00",
+    "```",
+  ].join("\n")
+
+  assert.deepEqual(extractMoments(markdown), [])
+})
+
+test("still finds prose moments alongside a diagram", () => {
+  const markdown = [
+    "## 3. “I Only Have 10 Minutes” Watch Guide",
+    "",
+    "- 05:00 The part that matters",
+    "",
+    "## 9. Diagrams",
+    "",
+    "```mermaid",
+    "timeline",
+    "  Opening claim : 01:00",
+    "```",
+  ].join("\n")
+
+  const moments = extractMoments(markdown)
+  assert.equal(moments.length, 1)
+  assert.equal(moments[0].startSeconds, 300)
+})

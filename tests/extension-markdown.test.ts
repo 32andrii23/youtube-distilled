@@ -153,3 +153,30 @@ test("normalizes settings to an available provider and its supported reasoning",
   assert.equal(isSelectableProvider(catalog, "codex"), false)
   assert.equal(isSelectableProvider(catalog, "claude"), true)
 })
+
+test("renders a fenced block as code without linkifying its timecodes", () => {
+  const markdown = ["```mermaid", "timeline", "  Opening claim : 01:00", "```"].join("\n")
+
+  assert.equal(
+    renderMarkdown(markdown),
+    "<pre><code>timeline\n  Opening claim : 01:00</code></pre>",
+  )
+})
+
+test("escapes html inside a fenced block", () => {
+  const markdown = ["```", "<script>alert(1)</script>", "```"].join("\n")
+
+  assert.equal(
+    renderMarkdown(markdown),
+    "<pre><code>&lt;script&gt;alert(1)&lt;/script&gt;</code></pre>",
+  )
+})
+
+test("keeps rendering normally after a fence closes", () => {
+  const markdown = ["```", "code 01:00", "```", "", "Then 02:00."].join("\n")
+
+  assert.match(
+    renderMarkdown(markdown),
+    /<pre><code>code 01:00<\/code><\/pre><p>Then <button[^>]*data-seconds="120"/,
+  )
+})

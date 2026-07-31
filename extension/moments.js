@@ -5,6 +5,7 @@
 import { TIMECODE_PATTERN, timecodeToSeconds } from "./markdown.js"
 
 const HEADING_PATTERN = /^(#{1,6})\s+(.+)$/
+const FENCE_PATTERN = /^ {0,3}(`{3,}|~{3,})/
 const TABLE_DIVIDER_CELL_PATTERN = /^:?-{3,}:?$/
 const LABEL_LIMIT = 80
 
@@ -109,8 +110,38 @@ function tableMoments(lines) {
   return { moments, consumed }
 }
 
+// A timeline diagram is dense with timecodes, and the whole-brief fallback below
+// would otherwise read its labels as watch moments and mark the seek bar with
+// times nobody chose.
+function withoutFences(lines) {
+  const kept = []
+  let fence = null
+
+  for (const line of lines) {
+    const marker = FENCE_PATTERN.exec(line)?.[1]
+
+    if (fence) {
+      if (marker && marker[0] === fence[0] && marker.length >= fence.length) fence = null
+      continue
+    }
+
+    if (marker) {
+      fence = marker
+      continue
+    }
+
+    kept.push(line)
+  }
+
+  return kept
+}
+
+function briefLines(markdown) {
+  return withoutFences(String(markdown).replace(/\r\n/g, "\n").split("\n"))
+}
+
 function watchGuideLines(markdown) {
-  const lines = String(markdown).replace(/\r\n/g, "\n").split("\n")
+  const lines = briefLines(markdown)
   let headingLevel = null
   const headingIndex = lines.findIndex((line) => {
     const heading = HEADING_PATTERN.exec(line.trim())
@@ -156,6 +187,5 @@ export function extractMoments(markdown) {
     if (guideMoments.length) return guideMoments
   }
 
-  const allLines = String(markdown).replace(/\r\n/g, "\n").split("\n")
-  return finish(momentsFromLines(allLines))
+  return finish(momentsFromLines(briefLines(markdown)))
 }

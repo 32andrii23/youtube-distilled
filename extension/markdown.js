@@ -25,6 +25,7 @@ const UNORDERED_ITEM_PATTERN = /^\s*[-*]\s+(.*)$/
 const ORDERED_ITEM_PATTERN = /^\s*\d+\.\s+(.*)$/
 const TABLE_DIVIDER_PATTERN = /^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$/
 const CODE_SPAN_PATTERN = /`([^`]+)`/g
+const FENCE_PATTERN = /^ {0,3}(`{3,}|~{3,})/
 const LINK_PATTERN = /\[([^\]]+)\]\(([^)\s]+)\)/g
 const BOLD_PATTERN = /\*\*([^*]+)\*\*/g
 const SAFE_HREF_PATTERN = /^(https?:\/\/|mailto:|#)/i
@@ -140,6 +141,27 @@ function renderBlockquote(lines, start) {
   return { html: `<blockquote><p>${renderInline(quoted.join(" "))}</p></blockquote>`, next: index }
 }
 
+// Diagrams arrive as fenced mermaid blocks. The panel does not draw them, so it
+// shows the source instead — escaped, and with no inline pass, which is what
+// keeps a timeline's timecodes from becoming seek buttons.
+function renderFence(lines, start) {
+  const marker = FENCE_PATTERN.exec(lines[start])[1]
+  const body = []
+  let index = start + 1
+
+  while (index < lines.length) {
+    const closing = FENCE_PATTERN.exec(lines[index])?.[1]
+    if (closing && closing[0] === marker[0] && closing.length >= marker.length) {
+      index += 1
+      break
+    }
+    body.push(lines[index])
+    index += 1
+  }
+
+  return { html: `<pre><code>${escapeHtml(body.join("\n"))}</code></pre>`, next: index }
+}
+
 function renderParagraph(lines, start) {
   const collected = []
   let index = start
@@ -161,7 +183,8 @@ function isTableStart(lines, index) {
 function isBlockStart(lines, index) {
   const line = lines[index]
   return (
-    HEADING_PATTERN.test(line)
+    FENCE_PATTERN.test(line)
+    || HEADING_PATTERN.test(line)
     || UNORDERED_ITEM_PATTERN.test(line)
     || ORDERED_ITEM_PATTERN.test(line)
     || line.trimStart().startsWith(">")
@@ -193,7 +216,8 @@ export function renderMarkdown(markdown) {
     }
 
     let block
-    if (isTableStart(lines, index)) block = renderTable(lines, index)
+    if (FENCE_PATTERN.test(line)) block = renderFence(lines, index)
+    else if (isTableStart(lines, index)) block = renderTable(lines, index)
     else if (line.trimStart().startsWith(">")) block = renderBlockquote(lines, index)
     else if (UNORDERED_ITEM_PATTERN.test(line)) block = renderList(lines, index, UNORDERED_ITEM_PATTERN, "ul")
     else if (ORDERED_ITEM_PATTERN.test(line)) block = renderList(lines, index, ORDERED_ITEM_PATTERN, "ol")
