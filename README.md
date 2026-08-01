@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/banner.png" alt="YouTube Distilled — paste a video, extract its transcript, and keep the highest-value moments" width="100%" />
+  <img src=".github/banner.png" alt="YouTube Distilled — paste a video, extract its transcript, and keep the highest-value moments" width="100%" />
 </p>
 
 <p align="center">
@@ -68,6 +68,18 @@ youtube-distilled
 
 If YouTube does not expose captions, the app says so and works from the remaining metadata and web context. It never invents timestamps by design, but—as with any AI-generated analysis—you should verify important claims against the source.
 
+### Several videos at once
+
+Each run is its own CLI process, so ten can work in parallel: open a tab per
+video in the web app, or hit Distill on several YouTube tabs and let the side
+panel follow whichever one you are looking at. Past the tenth, a request is
+refused rather than queued, so nothing sits in a silent wait. Set
+`YOUTUBE_DISTILLED_MAX_RUNS` before starting the app to move the ceiling.
+
+The leftmost header button opens another tab on the empty state, and each tab
+renames itself after the video it is distilling — YouTube's own title, so the tab
+strip stays readable with several runs going.
+
 ## Output
 
 Every brief follows the same useful structure:
@@ -80,6 +92,11 @@ Every brief follows the same useful structure:
 6. Practical use
 7. Critical view
 8. Final compression
+9. Diagrams — only where a picture says something the prose cannot, drawn with
+   seekable timecodes on every node
+
+A brief is headed by the video's own title and channel, and mermaid a model got
+slightly wrong is repaired before it is drawn rather than shown as a failure.
 
 ## Chrome extension
 

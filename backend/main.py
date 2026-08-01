@@ -7,6 +7,8 @@ import signal
 import tempfile
 import time
 from collections import OrderedDict
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -17,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from backend.prompt import build_followup_prompt, build_prompt
-from backend.youtube import VideoContext, fetch_video_context
+from backend.youtube import VideoContext, fetch_name, fetch_video_context
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -61,9 +63,27 @@ MODEL_CATALOG = {
             "default_reasoning": "medium",
         },
         {
+            "id": "gpt-5.6-luna",
+            "label": "GPT-5.6 Luna",
+            "description": "Fast and cheap",
+            "reasoning": ["low", "medium", "high", "xhigh", "max"],
+            "default_reasoning": "low",
+        },
+        # Spark runs on different inference hardware than the rest of the
+        # catalog, which is where its latency floor comes from rather than from
+        # being a smaller model. It is the only entry whose reasoning list stops
+        # at high; the levels above that are not offered for it.
+        {
+            "id": "gpt-5.3-codex-spark",
+            "label": "GPT-5.3 Codex Spark",
+            "description": "Near-instant",
+            "reasoning": ["low", "medium", "high"],
+            "default_reasoning": "low",
+        },
+        {
             "id": "gpt-5.4-mini",
             "label": "GPT-5.4 Mini",
-            "description": "Fastest Codex option",
+            "description": "Small and quick",
             "reasoning": ["low", "medium", "high", "xhigh"],
             "default_reasoning": "low",
         },
@@ -92,14 +112,63 @@ MODEL_CATALOG = {
         },
     ],
 }
-analysis_lock = asyncio.Lock()
+# Every run is its own provider CLI process with its own login, so several can
+# work at once — a tab per video, or the web app and the extension side by side.
+# A run costs memory and provider quota but almost no CPU, since it spends its
+# life waiting on the network. The cap is a backstop against a runaway caller
+# rather than a tuned figure; move it with YOUTUBE_DISTILLED_MAX_RUNS.
+DEFAULT_MAX_RUNS = 10
+
+
+def configured_max_runs() -> int:
+    raw = os.environ.get("YOUTUBE_DISTILLED_MAX_RUNS", "")
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return DEFAULT_MAX_RUNS
+
+
+MAX_RUNS = configured_max_runs()
 
 # Follow-ups answer from the transcript the analysis already fetched, so it is
 # held here rather than fetched again per question. In memory and process-local
-# on purpose: the app promises that analysis sessions are not persisted. Bounded
-# because the web app and the extension panel can sit on different videos.
-CONTEXT_CACHE_LIMIT = 4
+# on purpose: the app promises that analysis sessions are not persisted. Bounded,
+# but never below the number of videos that can be in flight at once: a brief
+# whose transcript was evicted before the reader asks anything is a brief whose
+# follow-ups answer blind.
+CONTEXT_CACHE_LIMIT = max(4, 2 * MAX_RUNS)
 context_cache: OrderedDict[str, VideoContext] = OrderedDict()
+
+
+class RunSlots:
+    """Counts the provider CLIs in flight. Single event loop, so a plain counter
+    is enough — and claiming is non-blocking on purpose: a run takes minutes, and
+    silently queueing behind one looks identical to a hung request."""
+
+    def __init__(self, limit: int) -> None:
+        self.limit = limit
+        self.active = 0
+
+    @contextmanager
+    def claim(self) -> Iterator[None]:
+        if self.active >= self.limit:
+            raise RunSlotsBusy(
+                f"{self.active} videos are already being distilled. "
+                "Let one finish, or raise YOUTUBE_DISTILLED_MAX_RUNS."
+            )
+        self.active += 1
+        try:
+            yield
+        finally:
+            self.active -= 1
+
+
+class RunSlotsBusy(RuntimeError):
+    """Every slot is taken. Distinct from a run that failed, because the caller
+    answers 429 rather than 502."""
+
+
+run_slots = RunSlots(MAX_RUNS)
 
 
 def video_id_from_url(video_url: str) -> str:
@@ -140,6 +209,12 @@ class SummaryResponse(BaseModel):
     model: str
     reasoning: str
     timings: list[TimingItem]
+
+
+class VideoNameResponse(BaseModel):
+    video_url: str
+    title: str | None = None
+    author: str | None = None
 
 
 class FollowupMessage(BaseModel):
@@ -426,6 +501,8 @@ async def run_provider(
 async def health() -> dict[str, object]:
     return {
         "status": "ok",
+        "max_runs": MAX_RUNS,
+        "active_runs": run_slots.active,
         "providers": {
             "codex": {
                 "available": shutil.which("codex") is not None,
@@ -439,6 +516,29 @@ async def health() -> dict[str, object]:
     }
 
 
+@app.get("/api/video", response_model=VideoNameResponse)
+async def video(url: str) -> VideoNameResponse:
+    """What the video is called, so a tab can be named after it while its run is
+    still going.
+
+    A context this process already fetched carries the name, so a repeat run
+    answers without touching the network. Otherwise this is a name-only fetch,
+    and deliberately not cached: a context with no transcript in it would starve
+    a later follow-up.
+    """
+    try:
+        video_url = normalize_youtube_url(url)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+    cached = recall_context(video_id_from_url(video_url))
+    if cached is not None:
+        return VideoNameResponse(video_url=video_url, title=cached.title, author=cached.author)
+
+    title, author = await asyncio.to_thread(fetch_name, video_id_from_url(video_url))
+    return VideoNameResponse(video_url=video_url, title=title, author=author)
+
+
 @app.post("/api/summarize", response_model=SummaryResponse)
 async def summarize(request: SummaryRequest) -> SummaryResponse:
     request_started = time.monotonic()
@@ -448,12 +548,9 @@ async def summarize(request: SummaryRequest) -> SummaryResponse:
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
 
-    if analysis_lock.locked():
-        raise HTTPException(status_code=429, detail="A video is already being distilled. Let it finish first.")
-
     prepared_at = time.monotonic()
     try:
-        async with analysis_lock:
+        with run_slots.claim():
             video_id = video_id_from_url(video_url)
             context_started = time.monotonic()
             context = await asyncio.to_thread(fetch_video_context, video_id)
@@ -466,6 +563,8 @@ async def summarize(request: SummaryRequest) -> SummaryResponse:
                 request.model,
                 request.reasoning,
             )
+    except RunSlotsBusy as error:
+        raise HTTPException(status_code=429, detail=str(error)) from error
     except RuntimeError as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
 
@@ -502,9 +601,6 @@ async def followup(request: FollowupRequest) -> FollowupResponse:
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
 
-    if analysis_lock.locked():
-        raise HTTPException(status_code=429, detail="A video is already being distilled. Let it finish first.")
-
     prompt = build_followup_prompt(
         video_url,
         request.summary,
@@ -513,7 +609,7 @@ async def followup(request: FollowupRequest) -> FollowupResponse:
         recall_context(video_id_from_url(video_url)),
     )
     try:
-        async with analysis_lock:
+        with run_slots.claim():
             result = await run_provider(
                 request.provider,
                 video_url,
@@ -522,6 +618,8 @@ async def followup(request: FollowupRequest) -> FollowupResponse:
                 request.reasoning,
                 prompt,
             )
+    except RunSlotsBusy as error:
+        raise HTTPException(status_code=429, detail=str(error)) from error
     except RuntimeError as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
 

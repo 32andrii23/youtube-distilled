@@ -52,18 +52,29 @@ def parse_watch_metadata(page: str) -> tuple[str | None, int | None]:
     return description, duration
 
 
-def _fetch_metadata(video_id: str) -> tuple[str | None, str | None, str | None, int | None]:
+def fetch_name(video_id: str) -> tuple[str | None, str | None]:
+    """The video's own title and channel, from oEmbed alone.
+
+    Split out of _fetch_metadata because this is the cheap half: one small
+    request, no watch page and no transcript. The web app asks for it while a run
+    is still starting, to name the browser tab after the video.
+    """
     video_url = f"https://www.youtube.com/watch?v={video_id}"
-    title = None
-    author = None
     try:
         oembed = json.loads(
             _fetch_text(f"https://www.youtube.com/oembed?url={video_url}&format=json")
         )
-        title = str(oembed.get("title") or "").strip() or None
-        author = str(oembed.get("author_name") or "").strip() or None
     except (OSError, ValueError, json.JSONDecodeError):
-        pass
+        return None, None
+
+    title = str(oembed.get("title") or "").strip() or None
+    author = str(oembed.get("author_name") or "").strip() or None
+    return title, author
+
+
+def _fetch_metadata(video_id: str) -> tuple[str | None, str | None, str | None, int | None]:
+    video_url = f"https://www.youtube.com/watch?v={video_id}"
+    title, author = fetch_name(video_id)
 
     description = None
     duration = None

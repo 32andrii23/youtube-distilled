@@ -8,6 +8,8 @@ export const FALLBACK_PROVIDERS = {
       { id: "gpt-5.6-sol", label: "GPT-5.6 Sol", reasoning: ["low", "medium", "high", "xhigh", "max"], default_reasoning: "low" },
       { id: "gpt-5.5", label: "GPT-5.5", reasoning: ["low", "medium", "high", "xhigh"], default_reasoning: "medium" },
       { id: "gpt-5.4", label: "GPT-5.4", reasoning: ["low", "medium", "high", "xhigh"], default_reasoning: "medium" },
+      { id: "gpt-5.6-luna", label: "GPT-5.6 Luna", reasoning: ["low", "medium", "high", "xhigh", "max"], default_reasoning: "low" },
+      { id: "gpt-5.3-codex-spark", label: "GPT-5.3 Codex Spark", reasoning: ["low", "medium", "high"], default_reasoning: "low" },
       { id: "gpt-5.4-mini", label: "GPT-5.4 Mini", reasoning: ["low", "medium", "high", "xhigh"], default_reasoning: "low" },
     ],
   },

@@ -1,9 +1,12 @@
-// Runs on youtube.com. It reports the open video, seeks the native player, and
-// brackets the distilled watch moments just above YouTube's own progress bar.
+// Runs on youtube.com. It reports the open video, seeks the native player,
+// brackets the distilled watch moments just above YouTube's own progress bar,
+// and drains the color out of the page when grayscale focus is on.
 //
-// Content scripts are classic scripts, so this file deliberately imports
-// nothing. Moment extraction stays in the panel; only finished plain data is
-// accepted here.
+// Content scripts are classic scripts, so this file has no static imports.
+// grayscale.js is the one exception, reached through a dynamic import: its
+// geometry needs to be unit-testable, which a classic script cannot offer.
+// Moment extraction stays in the panel; only finished plain data is accepted
+// here.
 
 const VIDEO_PATH_PATTERN = /^\/(?:shorts|live|embed)\/([A-Za-z0-9_-]{11})/
 const PROGRESS_CONTAINER_SELECTOR = ".ytp-progress-bar-container"
@@ -14,6 +17,10 @@ const OVERLAY_HIDDEN_CLASS = "ytd-distilled-marker-overlay-hidden"
 // YouTube's own chrome fade. Matching it keeps the brackets tied to the seek bar
 // instead of appearing to float over the video on their own.
 const CHROME_FADE = "0.25s cubic-bezier(0, 0, 0.2, 1)"
+const STRIP_CLASS = "ytd-distilled-grayscale-strip"
+// Must match the name panel.js connects with.
+const GRAYSCALE_PORT = "grayscale-focus"
+const PLAYER_SELECTOR = ".html5-video-player"
 const MARKER_CLASS = "ytd-distilled-marker"
 const TICK_CLASS = "ytd-distilled-marker-tick"
 const RANGE_CLASS = "ytd-distilled-marker-range"
@@ -36,9 +43,21 @@ let observedVideo = null
 let renderedMoments = null
 let renderedDuration = null
 let syncFrame = null
+let grayscaleOn = false
+let grayscale = null
+let stripElements = null
+let stripFrame = null
+// The panel ports that currently want this page grayed. A set rather than a
+// boolean because one panel can be open per browser window.
+const grayscaleRequests = new Set()
 
 const resizeObserver = new ResizeObserver(() => updateOverlayGeometry())
-const mutationObserver = new MutationObserver(() => scheduleSync())
+const mutationObserver = new MutationObserver(() => {
+  scheduleSync()
+  // Theater mode, a collapsed sidebar, and the miniplayer all resize the player
+  // through the DOM rather than the window, so the strips ride along here.
+  scheduleStripUpdate()
+})
 const chromeObserver = new MutationObserver(() => syncChromeVisibility())
 
 function readVideoId() {
@@ -106,6 +125,22 @@ function ensureStyles() {
   const style = document.createElement("style")
   style.id = STYLE_ID
   style.textContent = `
+    /* Grayscale focus. Each strip filters what is painted behind it, so the four
+       of them together desaturate the viewport except for the player's rect.
+       pointer-events stays off so the page underneath is still fully clickable,
+       and the z-index sits near the top of the stacking order deliberately: a
+       YouTube menu opening above the strips would float in color over a gray
+       page. Positions come from grayscaleStrips(). */
+    .${STRIP_CLASS} {
+      all: initial;
+      position: fixed;
+      z-index: 2147483646;
+      display: block;
+      backdrop-filter: grayscale(1);
+      -webkit-backdrop-filter: grayscale(1);
+      pointer-events: none;
+    }
+
     .${OVERLAY_CLASS} {
       all: initial;
       position: absolute;
@@ -228,6 +263,87 @@ function ensureStyles() {
   `
   const styleParent = document.head ?? document.documentElement
   styleParent.append(style)
+}
+
+/* Grayscale focus --------------------------------------------------------- */
+
+// The player's own chrome stays in color along with the picture, so the hole is
+// the player's box rather than the video's. Falling back to the video element
+// covers the players YouTube builds without that wrapper class.
+function findPlayerBox() {
+  const video = findVideoElement()
+  return video?.closest(PLAYER_SELECTOR) ?? video
+}
+
+// Hosted on documentElement rather than body: YouTube replaces body content
+// freely during SPA navigation, and the strips should outlive that.
+function ensureStrips() {
+  if (stripElements?.every((strip) => strip.isConnected)) return stripElements
+
+  for (const existing of document.querySelectorAll(`.${STRIP_CLASS}`)) existing.remove()
+  stripElements = Array.from({ length: 4 }, () => {
+    const strip = document.createElement("div")
+    strip.className = STRIP_CLASS
+    document.documentElement.append(strip)
+    return strip
+  })
+  return stripElements
+}
+
+function removeStrips() {
+  for (const existing of document.querySelectorAll(`.${STRIP_CLASS}`)) existing.remove()
+  stripElements = null
+}
+
+function updateStrips() {
+  if (!grayscaleOn || !grayscale) return
+
+  ensureStyles()
+  const box = findPlayerBox()
+  // A page with no player reports a zero rect, which grayscaleStrips() turns
+  // into full coverage. That is the intended result on a homepage or a search
+  // page: there is no video to spare.
+  const player = box
+    ? box.getBoundingClientRect()
+    : { left: 0, top: 0, width: 0, height: 0 }
+  const viewport = { width: window.innerWidth, height: window.innerHeight }
+
+  const strips = ensureStrips()
+  grayscale.grayscaleStrips(player, viewport).forEach((rect, index) => {
+    const strip = strips[index]
+    strip.style.left = `${rect.left}px`
+    strip.style.top = `${rect.top}px`
+    strip.style.width = `${rect.width}px`
+    strip.style.height = `${rect.height}px`
+  })
+}
+
+function scheduleStripUpdate() {
+  if (!grayscaleOn || stripFrame !== null) return
+  stripFrame = window.requestAnimationFrame(() => {
+    stripFrame = null
+    updateStrips()
+  })
+}
+
+// Grayscale is on while at least one panel still asks for it, which is what
+// makes a closed panel undo it: the port dies with the panel's document, its
+// request goes with it, and the last one out restores the page's color.
+function syncGrayscaleRequests() {
+  setGrayscale(grayscaleRequests.size > 0)
+}
+
+function setGrayscale(on) {
+  if (on === grayscaleOn) return
+  grayscaleOn = on
+
+  if (!on) {
+    if (stripFrame !== null) window.cancelAnimationFrame(stripFrame)
+    stripFrame = null
+    removeStrips()
+    return
+  }
+  updateStrips()
 }
 
 function formatTimecode(seconds) {
@@ -538,14 +654,52 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return false
 })
 
+// Grayscale focus lasts exactly as long as the panel that asked for it. The
+// panel opens a port per tab and posts the toggle down it; nothing is stored, so
+// closing the panel — or crashing it — takes the color drain along, and a panel
+// reopening finds the page in color again.
+//
+// The port is registered here rather than after the dynamic import so a panel
+// connecting during that round trip is never missed.
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== GRAYSCALE_PORT) return
+
+  port.onMessage.addListener((message) => {
+    if (message?.on === true) grayscaleRequests.add(port)
+    else grayscaleRequests.delete(port)
+    syncGrayscaleRequests()
+  })
+  port.onDisconnect.addListener(() => {
+    grayscaleRequests.delete(port)
+    syncGrayscaleRequests()
+  })
+})
+
 window.addEventListener("yt-navigate-finish", () => {
   scheduleSync()
+  scheduleStripUpdate()
   chrome.runtime.sendMessage({ type: "video-changed" }).catch(() => undefined)
 })
+
+// Scrolling moves the player without resizing anything, so it needs its own
+// trigger. Both are passive: the handler only ever queues a frame.
+window.addEventListener("scroll", scheduleStripUpdate, { passive: true })
+window.addEventListener("resize", scheduleStripUpdate, { passive: true })
+
+// The geometry comes from grayscale.js, which a classic content script can only
+// reach through a dynamic import. It costs a round trip at startup that nothing
+// waits on: a page asked to gray before the module lands stays in color for
+// another frame or two, and the import finishes the job on arrival.
+async function startGrayscale() {
+  grayscale = await import(chrome.runtime.getURL("grayscale.js"))
+  updateStrips()
+}
 
 function stopWatching() {
   if (syncFrame !== null) window.cancelAnimationFrame(syncFrame)
   syncFrame = null
+  if (stripFrame !== null) window.cancelAnimationFrame(stripFrame)
+  stripFrame = null
   mutationObserver.disconnect()
   disconnectPlayer()
 }
@@ -553,6 +707,7 @@ function stopWatching() {
 function startWatching() {
   mutationObserver.observe(document.documentElement, { childList: true, subtree: true })
   scheduleSync()
+  scheduleStripUpdate()
 }
 
 window.addEventListener("pagehide", stopWatching)
@@ -560,3 +715,10 @@ window.addEventListener("pageshow", startWatching)
 
 ensureStyles()
 startWatching()
+startGrayscale().catch(() => undefined)
+
+// An open panel cannot know about a tab that did not exist when it last looked,
+// and this script is the first thing in the tab that does. The same message the
+// panel already refreshes on brings it here to connect its grayscale port, so a
+// tab opened while focus is on catches up instead of staying in color.
+chrome.runtime.sendMessage({ type: "video-changed" }).catch(() => undefined)

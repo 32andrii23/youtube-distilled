@@ -25,7 +25,7 @@ const UNORDERED_ITEM_PATTERN = /^\s*[-*]\s+(.*)$/
 const ORDERED_ITEM_PATTERN = /^\s*\d+\.\s+(.*)$/
 const TABLE_DIVIDER_PATTERN = /^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$/
 const CODE_SPAN_PATTERN = /`([^`]+)`/g
-const FENCE_PATTERN = /^ {0,3}(`{3,}|~{3,})/
+const FENCE_PATTERN = /^ {0,3}(`{3,}|~{3,})(.*)$/
 const LINK_PATTERN = /\[([^\]]+)\]\(([^)\s]+)\)/g
 const BOLD_PATTERN = /\*\*([^*]+)\*\*/g
 const SAFE_HREF_PATTERN = /^(https?:\/\/|mailto:|#)/i
@@ -141,11 +141,16 @@ function renderBlockquote(lines, start) {
   return { html: `<blockquote><p>${renderInline(quoted.join(" "))}</p></blockquote>`, next: index }
 }
 
-// Diagrams arrive as fenced mermaid blocks. The panel does not draw them, so it
-// shows the source instead — escaped, and with no inline pass, which is what
-// keeps a timeline's timecodes from becoming seek buttons.
+// A fenced block renders escaped and with no inline pass, which is what keeps a
+// diagram's timecodes from becoming seek buttons in its source.
+//
+// A mermaid fence becomes a diagram placeholder holding that source, which
+// diagrams.js draws over once mermaid has loaded. The source stays in the DOM
+// rather than being handed over in a data attribute: it is what a redraw reads
+// on a theme change, and it is what stays on screen if the diagram cannot be
+// drawn at all.
 function renderFence(lines, start) {
-  const marker = FENCE_PATTERN.exec(lines[start])[1]
+  const [, marker, info] = FENCE_PATTERN.exec(lines[start])
   const body = []
   let index = start + 1
 
@@ -159,7 +164,15 @@ function renderFence(lines, start) {
     index += 1
   }
 
-  return { html: `<pre><code>${escapeHtml(body.join("\n"))}</code></pre>`, next: index }
+  const source = escapeHtml(body.join("\n"))
+  if (info.trim().toLowerCase() !== "mermaid") {
+    return { html: `<pre><code>${source}</code></pre>`, next: index }
+  }
+
+  return {
+    html: `<div class="diagram"><pre class="diagram-source"><code>${source}</code></pre></div>`,
+    next: index,
+  }
 }
 
 function renderParagraph(lines, start) {

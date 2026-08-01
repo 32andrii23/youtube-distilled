@@ -1,5 +1,10 @@
 @import "tailwindcss";
 
+/* Tailwind v4 compiles `dark:` to a prefers-color-scheme query by default. The
+   components in components/ui already carry dark: variants, so without this they
+   would answer to the OS while the theme button answered to nothing. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -31,7 +36,7 @@
 }
 
 :root {
-  --background: oklch(0.97 0 0);
+  --background: oklch(1 0 0);
   --foreground: oklch(0.11 0 0);
   --card: oklch(1 0 0);
   --card-foreground: oklch(0.11 0 0);
@@ -52,6 +57,40 @@
   --radius: 0.625rem;
   --font-sans: "Helvetica Neue", Helvetica, Arial, sans-serif;
   --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+
+  /* Hands the browser the theme too, so scrollbars and native controls follow. */
+  color-scheme: light;
+
+  /* The ink channel behind every translucent hairline and muted text tone below.
+     Flipping it in .dark turns black-alpha into white-alpha in one move, which is
+     what those surfaces need. Alpha values are unchanged from the light design. */
+  --ink: 0 0 0;
+}
+
+/* Greyscale throughout, matching the product's monochrome identity. */
+:root.dark {
+  --background: oklch(0.16 0 0);
+  --foreground: oklch(0.96 0 0);
+  --card: oklch(0.2 0 0);
+  --card-foreground: oklch(0.96 0 0);
+  --popover: oklch(0.21 0 0);
+  --popover-foreground: oklch(0.96 0 0);
+  --primary: oklch(0.96 0 0);
+  --primary-foreground: oklch(0.16 0 0);
+  --secondary: oklch(0.26 0 0);
+  --secondary-foreground: oklch(0.96 0 0);
+  --muted: oklch(0.26 0 0);
+  --muted-foreground: oklch(0.66 0 0);
+  --accent: oklch(0.28 0 0);
+  --accent-foreground: oklch(0.96 0 0);
+  --destructive: oklch(0.7 0 0);
+  --border: oklch(0.3 0 0);
+  --input: oklch(0.34 0 0);
+  --ring: oklch(0.62 0 0);
+
+  color-scheme: dark;
+
+  --ink: 255 255 255;
 }
 
 @layer base {
@@ -83,10 +122,10 @@
   align-items: center;
   gap: 0.9rem;
   overflow: hidden;
-  border: 1px solid rgb(0 0 0 / 0.1);
+  border: 1px solid rgb(var(--ink) / 0.1);
   border-radius: 0.65rem;
   padding: 0.9rem 1rem 1rem;
-  background: rgb(0 0 0 / 0.015);
+  background: rgb(var(--ink) / 0.015);
 }
 
 .loading-rail {
@@ -96,14 +135,14 @@
   left: 0;
   height: 2px;
   overflow: hidden;
-  background: rgb(0 0 0 / 0.06);
+  background: rgb(var(--ink) / 0.06);
 }
 
 .loading-rail span {
   display: block;
   width: 28%;
   height: 100%;
-  background: #000;
+  background: rgb(var(--ink));
   animation: distilled-sweep 1.9s ease-in-out infinite;
 }
 
@@ -123,7 +162,7 @@
 }
 
 .summary-markdown {
-  color: rgb(0 0 0 / 0.7);
+  color: rgb(var(--ink) / 0.7);
   font-size: 0.96rem;
   line-height: 1.75;
 }
@@ -163,28 +202,28 @@
 }
 
 .summary-markdown strong {
-  color: rgb(0 0 0 / 0.92);
+  color: rgb(var(--ink) / 0.92);
   font-weight: 650;
 }
 
 .summary-markdown h3,
 .summary-markdown h4 {
   margin: 1.4rem 0 0.6rem;
-  color: #000;
+  color: rgb(var(--ink));
   font-size: 1rem;
   font-weight: 650;
 }
 
 .summary-markdown a {
-  color: #000;
+  color: rgb(var(--ink));
   text-decoration: underline;
-  text-decoration-color: rgb(0 0 0 / 0.3);
+  text-decoration-color: rgb(var(--ink) / 0.3);
   text-underline-offset: 3px;
 }
 
 .timecode-link {
-  border-bottom: 1px solid rgb(0 0 0 / 0.4);
-  color: #000;
+  border-bottom: 1px solid rgb(var(--ink) / 0.4);
+  color: rgb(var(--ink));
   font-family: var(--font-mono);
   font-size: 0.88em;
   line-height: 1.2;
@@ -192,13 +231,13 @@
 }
 
 .timecode-link:hover {
-  border-bottom-color: #000;
+  border-bottom-color: rgb(var(--ink));
 }
 
 .summary-markdown blockquote {
-  border-left: 2px solid #000;
+  border-left: 2px solid rgb(var(--ink));
   padding-left: 1rem;
-  color: rgb(0 0 0 / 0.52);
+  color: rgb(var(--ink) / 0.52);
 }
 
 .summary-markdown table {
@@ -210,14 +249,14 @@
 
 .summary-markdown th,
 .summary-markdown td {
-  border-bottom: 1px solid rgb(0 0 0 / 0.12);
+  border-bottom: 1px solid rgb(var(--ink) / 0.12);
   padding: 0.75rem 0.8rem;
   text-align: left;
   vertical-align: top;
 }
 
 .summary-markdown th {
-  color: #000;
+  color: rgb(var(--ink));
   font-family: var(--font-mono);
   font-size: 0.68rem;
   font-weight: 600;
@@ -226,11 +265,11 @@
 }
 
 .summary-markdown code {
-  border: 1px solid rgb(0 0 0 / 0.1);
+  border: 1px solid rgb(var(--ink) / 0.1);
   border-radius: 0.3rem;
-  background: rgb(0 0 0 / 0.04);
+  background: rgb(var(--ink) / 0.04);
   padding: 0.1rem 0.3rem;
-  color: #000;
+  color: rgb(var(--ink));
   font-family: var(--font-mono);
   font-size: 0.84em;
 }
@@ -256,9 +295,9 @@
 .summary-markdown .diagram {
   margin: 1.25rem 0;
   overflow-x: auto;
-  border: 1px solid rgb(0 0 0 / 0.1);
+  border: 1px solid rgb(var(--ink) / 0.1);
   border-radius: 0.6rem;
-  background: #fff;
+  background: var(--card);
   padding: 1rem;
   text-align: center;
 }
@@ -271,20 +310,20 @@
 .summary-markdown .diagram-seek {
   cursor: pointer;
   text-decoration: underline;
-  text-decoration-color: rgb(0 0 0 / 0.3);
+  text-decoration-color: rgb(var(--ink) / 0.3);
   text-underline-offset: 3px;
 }
 
 .summary-markdown .diagram-failed {
   margin: 1.25rem 0;
-  border: 1px solid rgb(0 0 0 / 0.1);
+  border: 1px solid rgb(var(--ink) / 0.1);
   border-radius: 0.6rem;
   padding: 1rem;
 }
 
 .summary-markdown .diagram-failed p {
   margin: 0 0 0.6rem;
-  color: rgb(0 0 0 / 0.45);
+  color: rgb(var(--ink) / 0.45);
   font-size: 0.82rem;
 }
 

@@ -155,11 +155,40 @@ test("normalizes settings to an available provider and its supported reasoning",
 })
 
 test("renders a fenced block as code without linkifying its timecodes", () => {
+  const markdown = ["```sh", "youtube-distilled 01:00", "```"].join("\n")
+
+  assert.equal(
+    renderMarkdown(markdown),
+    "<pre><code>youtube-distilled 01:00</code></pre>",
+  )
+})
+
+// diagrams.js draws over this placeholder once mermaid has loaded, reading the
+// source back out of it. Its timecodes must not be linkified either: they are
+// diagram syntax here, and become seek controls only on the drawn labels.
+test("renders a mermaid fence as a diagram placeholder holding its source", () => {
   const markdown = ["```mermaid", "timeline", "  Opening claim : 01:00", "```"].join("\n")
 
   assert.equal(
     renderMarkdown(markdown),
-    "<pre><code>timeline\n  Opening claim : 01:00</code></pre>",
+    '<div class="diagram"><pre class="diagram-source"><code>timeline\n'
+    + "  Opening claim : 01:00</code></pre></div>",
+  )
+})
+
+test("treats a mermaid fence as a diagram whatever the case and spacing", () => {
+  for (const info of ["mermaid", "Mermaid", "mermaid ", " MERMAID"]) {
+    assert.match(renderMarkdown(["```" + info, "graph TD", "```"].join("\n")), /class="diagram"/)
+  }
+})
+
+test("escapes html inside a diagram placeholder", () => {
+  const markdown = ["```mermaid", "graph TD; a[\"<img src=x>\"]", "```"].join("\n")
+
+  assert.equal(
+    renderMarkdown(markdown),
+    '<div class="diagram"><pre class="diagram-source"><code>graph TD; a[&quot;&lt;img src=x&gt;&quot;]'
+    + "</code></pre></div>",
   )
 })
 

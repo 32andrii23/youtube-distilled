@@ -2,17 +2,46 @@
 //
 // Video detection and timecode seeking stay in the content script. This panel
 // owns the local API requests, settings, and rendering.
+//
+// One panel serves every tab in the window, so it keeps a run per video rather
+// than a single current one: the service distils several videos at once, and
+// switching tabs has to switch which of those runs is on screen.
 
+import { drawDiagrams } from "./diagrams.js"
 import { formatDuration, formatElapsed, formatStepDuration, cleanVideoTitle } from "./format.js"
 import { renderMarkdown, splitSummary } from "./markdown.js"
 import { extractMoments } from "./moments.js"
 import { DEFAULT_SETTINGS, FALLBACK_PROVIDERS, isSelectableProvider, normalizeSettings as normalizeSettingsFromCatalog } from "./provider-catalog.js"
+import { describeRunsElsewhere, runsElsewhere } from "./runs.js"
+import {
+  applyTheme,
+  DARK_MEDIA_QUERY,
+  nextThemeMode,
+  normalizeThemeMode,
+  resolveTheme,
+  THEME_KEY,
+} from "./theme.js"
 
 const API_URL = "http://127.0.0.1:4322"
 const SETTINGS_KEY = "youtube-distilled-settings"
 const NOTICE_TIMEOUT_MS = 6000
+const YOUTUBE_TABS = "https://www.youtube.com/*"
+// Must match the name content.js accepts.
+const GRAYSCALE_PORT = "grayscale-focus"
 
 const PROVIDER_LABELS = { codex: "Codex", claude: "Claude" }
+const PROVIDER_ICONS = { codex: "icons/codex.svg", claude: "icons/claude.svg" }
+
+const THEME_LABELS = { system: "System", light: "Light", dark: "Dark" }
+
+// Lucide's monitor, sun, and moon, matching the web app's button.
+const THEME_ICONS = {
+  system:
+    '<rect width="20" height="14" x="2" y="3" rx="2" /><path d="M8 21h8" /><path d="M12 17v4" />',
+  light:
+    '<circle cx="12" cy="12" r="4" /><path d="M12 2v2" /><path d="M12 20v2" /><path d="m4.93 4.93 1.41 1.41" /><path d="m17.66 17.66 1.41 1.41" /><path d="M2 12h2" /><path d="M20 12h2" /><path d="m6.34 17.66-1.41 1.41" /><path d="m19.07 4.93-1.41 1.41" />',
+  dark: '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />',
+}
 
 const LOADING_STAGES = [
   { at: 0, label: "Opening the video context" },
@@ -35,8 +64,14 @@ const ui = {
   },
   settingsToggle: element("settings-toggle"),
   settings: element("settings"),
+  pickerMark: element("picker-mark"),
+  themeToggle: element("theme-toggle"),
+  themeIcon: element("theme-icon"),
+  grayscaleToggle: element("grayscale-toggle"),
   modelSelect: element("model-select"),
-  reasoningSelect: element("reasoning-select"),
+  reasoningRange: element("reasoning-range"),
+  reasoningValue: element("reasoning-value"),
+  reasoningSingle: element("reasoning-single"),
   thumbnail: element("video-thumbnail"),
   title: element("video-title"),
   channel: element("video-channel"),
@@ -53,6 +88,9 @@ const ui = {
   openVideo: element("open-video"),
   reset: element("reset"),
   markerStatus: element("marker-status"),
+  otherRuns: element("other-runs"),
+  resultTitle: element("result-title"),
+  resultChannel: element("result-channel"),
   notice: element("result-notice"),
   sections: element("sections"),
   errorMessage: element("error-message"),
@@ -63,10 +101,18 @@ const ui = {
 
 let settings = { ...DEFAULT_SETTINGS }
 let providers = FALLBACK_PROVIDERS
+let themeMode = "system"
+let resolvedTheme = "light"
+let grayscaleOn = false
+// tabId -> the port carrying grayscale focus to that tab's content script.
+const grayscalePorts = new Map()
 let state = "no-video"
 let currentVideo = null
-let resultVideo = null
-let brief = null
+// videoId -> { video, state, startedAt, settings, brief, momentCount, error }.
+// A run outlives the tab switch that hides it, so nothing is lost by reading
+// another video while it works.
+const runs = new Map()
+let shownVideoId = null
 let runTimer = null
 let noticeTimer = null
 
@@ -103,6 +149,25 @@ function fillSelect(select, options, value) {
   )
 }
 
+// The reasoning levels are an ordered scale, so the slider tracks the index and
+// the level name is read back out of the model's own list.
+function renderReasoning(model) {
+  const levels = model.reasoning
+  const single = levels.length < 2
+
+  ui.reasoningValue.textContent = settings.reasoning
+  ui.reasoningRange.hidden = single
+  ui.reasoningSingle.hidden = !single
+
+  if (single) {
+    ui.reasoningSingle.textContent = `${model.label} runs at a single reasoning level.`
+    return
+  }
+
+  ui.reasoningRange.max = String(levels.length - 1)
+  ui.reasoningRange.value = String(Math.max(0, levels.indexOf(settings.reasoning)))
+}
+
 function renderSettings() {
   for (const segment of document.querySelectorAll(".segment")) {
     const selectable = isSelectableProvider(providers, segment.dataset.provider)
@@ -112,25 +177,99 @@ function renderSettings() {
   }
 
   const model = selectedModel()
+  ui.pickerMark.src = PROVIDER_ICONS[settings.provider] ?? PROVIDER_ICONS.codex
   fillSelect(ui.modelSelect, providers[settings.provider]?.models ?? [], model?.id)
   if (!model) {
     ui.modelSelect.disabled = true
-    ui.reasoningSelect.disabled = true
+    ui.reasoningRange.disabled = true
+    ui.settingsToggle.setAttribute("aria-label", "Choose model")
     ui.idleConfig.textContent = "No provider is available on this machine."
     ui.loadingConfig.textContent = ui.idleConfig.textContent
     return
   }
   ui.modelSelect.disabled = false
-  fillSelect(
-    ui.reasoningSelect,
-    model.reasoning.map((reasoning) => ({ id: reasoning, label: reasoning })),
-    settings.reasoning,
+  ui.reasoningRange.disabled = false
+  ui.settingsToggle.setAttribute(
+    "aria-label",
+    `Choose model. Currently ${PROVIDER_LABELS[settings.provider] ?? settings.provider} ${model.label}.`,
   )
-  ui.reasoningSelect.disabled = model.reasoning.length === 1
+  renderReasoning(model)
 
   const description = describeSettings()
   ui.idleConfig.textContent = description
-  ui.loadingConfig.textContent = description
+  // A run in progress keeps describing the model it was started with, whatever
+  // the picker has been moved to since.
+  if (shownRun()?.state !== "running") ui.loadingConfig.textContent = description
+}
+
+/* Theme -------------------------------------------------------------------- */
+
+function renderTheme() {
+  const nextMode = nextThemeMode(themeMode)
+  resolvedTheme = resolveTheme(themeMode, window.matchMedia(DARK_MEDIA_QUERY).matches)
+  applyTheme(resolvedTheme)
+  ui.themeIcon.innerHTML = THEME_ICONS[themeMode]
+  ui.themeToggle.setAttribute(
+    "aria-label",
+    `Theme: ${THEME_LABELS[themeMode].toLowerCase()}. Switch to ${THEME_LABELS[nextMode].toLowerCase()}.`,
+  )
+
+  // Mermaid bakes its colours into the SVG it returns, so a diagram on screen
+  // has to be drawn again rather than restyled.
+  drawDiagrams(ui.sections, resolvedTheme)
+}
+
+async function saveThemeMode() {
+  await chrome.storage.local.set({ [THEME_KEY]: themeMode })
+}
+
+/* Grayscale focus --------------------------------------------------------- */
+
+function renderGrayscale() {
+  ui.grayscaleToggle.setAttribute("aria-pressed", String(grayscaleOn))
+  ui.grayscaleToggle.setAttribute(
+    "aria-label",
+    grayscaleOn
+      ? "Restore the page's color"
+      : "Grayscale the page except the video",
+  )
+}
+
+// Grayscale focus lasts only as long as this panel. The toggle is held in memory
+// and never written to storage, and it reaches the page down a port per tab: when
+// the panel closes, its document goes and the ports go with it, so every tab
+// restores its own color without the panel having to undo anything on the way
+// out — which a closing document cannot be relied on to do. Reopening the panel
+// therefore starts from off, and toggling it is the only way back to gray.
+//
+// One port per tab, reused until the tab drops it. A tab that has no content
+// script yet disconnects immediately; the next sendGrayscale() reconnects it.
+function grayscalePort(tabId) {
+  const existing = grayscalePorts.get(tabId)
+  if (existing) return existing
+
+  const port = chrome.tabs.connect(tabId, { name: GRAYSCALE_PORT })
+  port.onDisconnect.addListener(() => {
+    if (grayscalePorts.get(tabId) === port) grayscalePorts.delete(tabId)
+  })
+  grayscalePorts.set(tabId, port)
+  return port
+}
+
+// Every YouTube tab, not just the active one: the toggle is about the browsing
+// session rather than the video currently on screen.
+async function sendGrayscale() {
+  const tabs = await chrome.tabs.query({ url: YOUTUBE_TABS })
+  for (const tab of tabs) {
+    if (tab.id === undefined) continue
+    try {
+      grayscalePort(tab.id).postMessage({ on: grayscaleOn })
+    } catch {
+      // The tab closed or reloaded between the query and the post. It comes back
+      // with a fresh content script, which announces itself and gets picked up.
+      grayscalePorts.delete(tab.id)
+    }
+  }
 }
 
 /* State ------------------------------------------------------------------- */
@@ -215,18 +354,51 @@ function renderIdle(video) {
   showState("idle")
 }
 
-// Refreshes the detected video. A finished brief is left on screen — switching
-// tabs should not discard something the user is still reading.
+/* Runs -------------------------------------------------------------------- */
+
+function shownRun() {
+  return (shownVideoId && runs.get(shownVideoId)) || null
+}
+
+// Runs the panel is not currently showing are invisible work, so they are
+// counted out loud. Otherwise a tab switch looks like the run was dropped.
+function renderOtherRuns() {
+  const elsewhere = runsElsewhere(runs, shownVideoId)
+  ui.otherRuns.textContent = describeRunsElsewhere(elsewhere)
+  ui.otherRuns.hidden = elsewhere === 0
+}
+
+// Points the panel at one video: its run if it has one, the idle card if not.
+function showVideo(video) {
+  stopRunTimer()
+  shownVideoId = video.videoId
+  const run = runs.get(video.videoId)
+
+  if (!run) renderIdle(video)
+  else if (run.state === "running") renderRunning(run)
+  else if (run.state === "error") failWith(run.error)
+  else renderResult(run)
+
+  renderOtherRuns()
+}
+
+// Refreshes the detected video. A tab holding no video leaves the panel alone —
+// switching away should not discard a brief being read or hide a live run.
 async function refresh() {
   const video = await probeActiveTab()
   currentVideo = video
 
-  if (state === "running" || state === "success" || state === "error" || state === "service-unavailable") return
+  // Runs on every tab change, load, and content-script announcement, which is
+  // where a tab that has no port yet — freshly opened or reloaded — gets one.
+  if (grayscaleOn) await sendGrayscale()
+
+  if (state === "service-unavailable") return
   if (!video) {
-    showState("no-video")
+    if (!shownRun()) showState("no-video")
+    renderOtherRuns()
     return
   }
-  renderIdle(video)
+  showVideo(video)
 }
 
 /* Run -------------------------------------------------------------------- */
@@ -246,31 +418,59 @@ function showServiceUnavailable() {
   showState("service-unavailable")
 }
 
+function tickRun(run) {
+  const elapsedSeconds = Math.floor((Date.now() - run.startedAt) / 1000)
+  ui.loadingElapsed.textContent = formatElapsed(elapsedSeconds)
+  ui.loadingStage.textContent = stageFor(elapsedSeconds).label
+}
+
+// One timer, and it follows whichever run is on screen: the others carry their
+// own start time, so their elapsed reading is correct when they come back up.
+function renderRunning(run) {
+  stopRunTimer()
+  ui.loadingConfig.textContent = describeSettings(run.settings)
+  tickRun(run)
+  showState("running")
+  runTimer = window.setInterval(() => tickRun(run), 250)
+}
+
+// "New" can retire a run while its CLI is still working. Its result then belongs
+// to nothing on screen and is dropped rather than painted over what replaced it.
+function stillWanted(run) {
+  return runs.get(run.video.videoId) === run
+}
+
+function repaint(video) {
+  if (shownVideoId === video.videoId) showVideo(video)
+  else renderOtherRuns()
+}
+
 async function distill() {
   if (!currentVideo) {
     showState("no-video")
     return
   }
 
-  const video = currentVideo
-  const startedAt = Date.now()
-
   if (!isSelectableProvider(providers, settings.provider)) {
     failWith(`${PROVIDER_LABELS[settings.provider]} CLI is not available on this machine.`)
     return
   }
 
+  const video = currentVideo
+  const run = {
+    video,
+    state: "running",
+    startedAt: Date.now(),
+    settings: { ...settings },
+    brief: null,
+    momentCount: 0,
+    error: "",
+  }
+  runs.set(video.videoId, run)
+
   renderSettings()
   setSettingsOpen(false)
-  ui.loadingStage.textContent = LOADING_STAGES[0].label
-  ui.loadingElapsed.textContent = formatElapsed(0)
-  showState("running")
-
-  runTimer = window.setInterval(() => {
-    const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000)
-    ui.loadingElapsed.textContent = formatElapsed(elapsedSeconds)
-    ui.loadingStage.textContent = stageFor(elapsedSeconds).label
-  }, 250)
+  showVideo(video)
 
   try {
     const response = await fetch(`${API_URL}/api/summarize`, {
@@ -278,28 +478,34 @@ async function distill() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         url: `https://www.youtube.com/watch?v=${video.videoId}`,
-        provider: settings.provider,
-        model: settings.model,
-        reasoning: settings.reasoning,
+        provider: run.settings.provider,
+        model: run.settings.model,
+        reasoning: run.settings.reasoning,
       }),
     })
     const payload = await response.json()
     if (!response.ok) throw new Error(payload.detail || "The summary could not be generated.")
+    if (!stillWanted(run)) return
 
-    stopRunTimer()
-    resultVideo = video
-    brief = payload
     const moments = extractMoments(payload.summary)
-    renderResult(payload, moments.length)
+    run.state = "success"
+    run.brief = payload
+    run.momentCount = moments.length
+    // The markers go to the run's own tab, whichever tab is in front now.
     await sendMoments(video, moments)
   } catch (error) {
-    stopRunTimer()
+    if (!stillWanted(run)) return
     if (error instanceof TypeError) {
-      showServiceUnavailable()
+      runs.delete(video.videoId)
+      if (shownVideoId === video.videoId) showServiceUnavailable()
+      renderOtherRuns()
       return
     }
-    failWith(error instanceof Error ? error.message : "Something went wrong.")
+    run.state = "error"
+    run.error = error instanceof Error ? error.message : "Something went wrong."
   }
+
+  repaint(video)
 }
 
 /* Result ----------------------------------------------------------------- */
@@ -347,9 +553,18 @@ function renderSections(payload) {
   })
 
   ui.sections.replaceChildren(...articles)
+  // Asynchronous, because mermaid is only loaded once a brief actually has a
+  // diagram in it. Until it lands, each diagram shows its own source.
+  drawDiagrams(ui.sections, resolvedTheme)
 }
 
-function renderResult(payload, momentCount) {
+function renderResult(run) {
+  const { brief: payload, momentCount, video } = run
+
+  // The video's own name heads the brief: the panel outlives the tab that made
+  // it, so by the time it is read the thumbnail above may be another video.
+  ui.resultTitle.textContent = video.title || "Summary"
+  ui.resultChannel.textContent = video.channel
   ui.timingsLabel.textContent = `Ready in ${formatElapsed(payload.elapsed_seconds)}`
   ui.timings.hidden = true
   ui.timingsToggle.setAttribute("aria-expanded", "false")
@@ -391,7 +606,7 @@ async function clearMoments(video) {
 }
 
 async function seekTo(seconds) {
-  const target = resultVideo ?? currentVideo
+  const target = shownRun()?.video ?? currentVideo
   if (!target) return
 
   try {
@@ -402,14 +617,15 @@ async function seekTo(seconds) {
   }
 }
 
+// Retires only the run on screen. Runs on other tabs are none of its business.
 async function reset() {
-  const markerVideo = resultVideo
+  const run = shownRun()
   stopRunTimer()
-  brief = null
-  resultVideo = null
+  if (run) runs.delete(run.video.videoId)
+  shownVideoId = null
   ui.notice.replaceChildren()
   showState("no-video")
-  await clearMoments(markerVideo)
+  await clearMoments(run?.video)
   await refresh()
 }
 
@@ -455,10 +671,40 @@ ui.modelSelect.addEventListener("change", async () => {
   await saveSettings()
 })
 
-ui.reasoningSelect.addEventListener("change", async () => {
-  settings = normalizeSettings({ ...settings, reasoning: ui.reasoningSelect.value })
+function reasoningLevelAt(index) {
+  return selectedModel()?.reasoning?.[Number(index)]
+}
+
+// The readout follows the thumb, but the write waits for the drag to end so a
+// single gesture is one storage write rather than dozens.
+ui.reasoningRange.addEventListener("input", () => {
+  const level = reasoningLevelAt(ui.reasoningRange.value)
+  if (level) ui.reasoningValue.textContent = level
+})
+
+ui.reasoningRange.addEventListener("change", async () => {
+  const level = reasoningLevelAt(ui.reasoningRange.value)
+  if (!level) return
+  settings = normalizeSettings({ ...settings, reasoning: level })
   renderSettings()
   await saveSettings()
+})
+
+ui.themeToggle.addEventListener("click", async () => {
+  themeMode = nextThemeMode(themeMode)
+  renderTheme()
+  await saveThemeMode()
+})
+
+ui.grayscaleToggle.addEventListener("click", async () => {
+  grayscaleOn = !grayscaleOn
+  renderGrayscale()
+  await sendGrayscale()
+})
+
+// "System" has to keep tracking the OS while the panel is open.
+window.matchMedia(DARK_MEDIA_QUERY).addEventListener("change", () => {
+  if (themeMode === "system") renderTheme()
 })
 
 ui.distill.addEventListener("click", distill)
@@ -495,6 +741,7 @@ ui.timingsToggle.addEventListener("click", () => {
 })
 
 ui.copy.addEventListener("click", async () => {
+  const brief = shownRun()?.brief
   if (!brief) return
   try {
     await navigator.clipboard.writeText(brief.summary)
@@ -525,8 +772,16 @@ chrome.runtime.onMessage.addListener((message) => {
 })
 
 async function start() {
-  const stored = await chrome.storage.local.get(SETTINGS_KEY)
+  // Grayscale is deliberately absent here: it is a per-session toggle, so every
+  // panel opens with the page in color.
+  const stored = await chrome.storage.local.get([SETTINGS_KEY, THEME_KEY])
+  // An earlier version did store the toggle. Clearing it keeps the promise that
+  // nothing about grayscale outlives the panel, on upgraded installs too.
+  chrome.storage.local.remove("youtube-distilled-grayscale")
   settings = normalizeSettings(stored?.[SETTINGS_KEY])
+  themeMode = normalizeThemeMode(stored?.[THEME_KEY])
+  renderTheme()
+  renderGrayscale()
   renderSettings()
   await loadHealth()
 }

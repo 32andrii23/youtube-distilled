@@ -2,23 +2,12 @@
 // mermaid blocks in section 9; timecoded diagram types carry a real timestamp on
 // every node, and those labels become seek controls for the floating player.
 
-import { useEffect, useId, useRef, useState } from "react"
+import { memo, useEffect, useId, useRef, useState } from "react"
 
+import { repairMermaid } from "../extension/mermaid-repair.js"
+import type { ResolvedTheme } from "./theme"
+import { DIAGRAM_THEME_VARIABLES } from "./theme"
 import { TIMECODE_PATTERN, timecodeToSeconds } from "./timecodes"
-
-// Greyscale on white, matching the brief around it. The app has no dark mode,
-// so there is nothing to switch between.
-const THEME_VARIABLES = {
-  background: "#ffffff",
-  primaryColor: "#f4f4f4",
-  primaryTextColor: "#000000",
-  primaryBorderColor: "rgba(0, 0, 0, 0.18)",
-  secondaryColor: "#ffffff",
-  tertiaryColor: "#fafafa",
-  lineColor: "rgba(0, 0, 0, 0.35)",
-  textColor: "rgba(0, 0, 0, 0.78)",
-  fontSize: "13px",
-}
 
 // Mermaid puts labels in SVG <text> for some diagram types and in HTML inside a
 // <foreignObject> for others, so both have to be swept to find every label.
@@ -29,12 +18,25 @@ function firstTimecode(text: string) {
   return TIMECODE_PATTERN.exec(text)
 }
 
-export default function MermaidDiagram({
+type Mermaid = typeof import("mermaid")["default"]
+
+async function repaired(mermaid: Mermaid, source: string) {
+  const candidate = repairMermaid(source)
+  if (candidate === source) return null
+  return (await mermaid.parse(candidate, { suppressErrors: true })) ? candidate : null
+}
+
+// Memoised because a brief is re-rendered on every keystroke in the follow-up
+// box, and redrawing a diagram means losing it and getting it back a frame
+// later — the page jumping under the reader as they type.
+export default memo(function MermaidDiagram({
   source,
   onTimecode,
+  theme,
 }: {
   source: string
   onTimecode: (label: string, seconds: number) => void
+  theme: ResolvedTheme
 }) {
   const [svg, setSvg] = useState("")
   const [failed, setFailed] = useState(false)
@@ -53,19 +55,23 @@ export default function MermaidDiagram({
         startOnLoad: false,
         securityLevel: "strict",
         theme: "base",
-        themeVariables: THEME_VARIABLES,
+        themeVariables: DIAGRAM_THEME_VARIABLES[theme],
       })
 
       // Model-written mermaid is invalid often enough that this is the expected
-      // path, not the exceptional one. suppressErrors returns false, not throws.
-      const valid = await mermaid.parse(source, { suppressErrors: true })
+      // path, not the exceptional one. suppressErrors returns false, not throws,
+      // so a source that will not parse gets the repairs applied and one more
+      // try. Only the version that parses is ever drawn.
+      const drawable = (await mermaid.parse(source, { suppressErrors: true }))
+        ? source
+        : await repaired(mermaid, source)
       if (cancelled) return
-      if (!valid) {
+      if (!drawable) {
         setFailed(true)
         return
       }
 
-      const result = await mermaid.render(renderId, source)
+      const result = await mermaid.render(renderId, drawable)
       if (!cancelled) setSvg(result.svg)
     }
 
@@ -78,7 +84,7 @@ export default function MermaidDiagram({
     return () => {
       cancelled = true
     }
-  }, [source, renderId])
+  }, [source, renderId, theme])
 
   useEffect(() => {
     const container = containerRef.current
@@ -122,4 +128,4 @@ export default function MermaidDiagram({
       dangerouslySetInnerHTML={{ __html: svg }}
     />
   )
-}
+})

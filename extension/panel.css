@@ -6,6 +6,7 @@
 :root {
   --background: oklch(1 0 0);
   --foreground: oklch(0.11 0 0);
+  --surface: oklch(1 0 0);
   --muted: oklch(0.95 0 0);
   --muted-foreground: oklch(0.49 0 0);
   --border: oklch(0.86 0 0);
@@ -13,11 +14,35 @@
   --font-sans: "Helvetica Neue", Helvetica, Arial, sans-serif;
   --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 
-  --hairline: rgb(0 0 0 / 0.1);
-  --ink-40: rgb(0 0 0 / 0.4);
-  --ink-55: rgb(0 0 0 / 0.55);
-  --ink-70: rgb(0 0 0 / 0.7);
+  /* Hands the browser the theme too, so the native select's dropdown and the
+     scrollbars follow rather than staying light. */
+  color-scheme: light;
+
+  /* Every translucent hairline and muted tone below is built on this channel, so
+     the dark theme flips black-alpha to white-alpha in one move. */
+  --ink: 0 0 0;
+
+  --hairline: rgb(var(--ink) / 0.1);
+  --ink-40: rgb(var(--ink) / 0.4);
+  --ink-55: rgb(var(--ink) / 0.55);
+  --ink-70: rgb(var(--ink) / 0.7);
+  --header-bg: rgb(255 255 255 / 0.88);
   --gutter: 1.125rem;
+}
+
+/* Mirrors the .dark ramp in src/index.css so the two surfaces stay one product. */
+:root.dark {
+  --background: oklch(0.16 0 0);
+  --foreground: oklch(0.96 0 0);
+  --surface: oklch(0.21 0 0);
+  --muted: oklch(0.26 0 0);
+  --muted-foreground: oklch(0.66 0 0);
+  --border: oklch(0.3 0 0);
+
+  color-scheme: dark;
+
+  --ink: 255 255 255;
+  --header-bg: rgb(30 30 30 / 0.88);
 }
 
 * {
@@ -32,15 +57,15 @@ body {
   margin: 0;
   min-width: 320px;
   background: var(--background);
-  color: #000;
+  color: rgb(var(--ink));
   font-size: 0.8125rem;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
 
 ::selection {
-  background: #000;
-  color: #fff;
+  background: rgb(var(--ink));
+  color: var(--background);
 }
 
 button,
@@ -50,7 +75,7 @@ select {
 }
 
 :focus-visible {
-  outline: 2px solid rgb(0 0 0 / 0.35);
+  outline: 2px solid rgb(var(--ink) / 0.35);
   outline-offset: 2px;
 }
 
@@ -73,7 +98,7 @@ svg {
   justify-content: space-between;
   gap: 0.75rem;
   border-bottom: 1px solid var(--hairline);
-  background: rgb(255 255 255 / 0.88);
+  background: var(--header-bg);
   padding: 0.75rem var(--gutter);
   backdrop-filter: blur(8px);
 }
@@ -91,6 +116,12 @@ svg {
   border-radius: 0.25rem;
 }
 
+/* The icon is an opaque near-white tile, not transparent artwork, so it would
+   otherwise paint a bright square in the dark header. */
+:root.dark .wordmark img {
+  filter: invert(1);
+}
+
 .icon-button {
   display: grid;
   place-items: center;
@@ -98,10 +129,21 @@ svg {
   height: 1.75rem;
   border: 1px solid var(--hairline);
   border-radius: 999px;
-  background: #fff;
+  background: var(--surface);
   color: var(--ink-55);
   cursor: pointer;
   transition: color 0.15s, background 0.15s;
+}
+
+/* The provider marks ship as black artwork, so they need inverting whenever they
+   sit on a dark ground. */
+:root.dark .icon-button img {
+  filter: invert(1);
+}
+
+.icon-button img {
+  width: 0.875rem;
+  height: 0.875rem;
 }
 
 .icon-button svg {
@@ -109,15 +151,35 @@ svg {
   height: 0.875rem;
 }
 
+/* A toggle that is on has to outrank hover, which already claims --muted, so it
+   fills solid instead. Inverting the whole button rather than just tinting the
+   icon keeps the state readable at 1.75rem. */
+.icon-button[aria-pressed="true"] {
+  border-color: rgb(var(--ink));
+  background: rgb(var(--ink));
+  color: var(--surface);
+}
+
+.icon-button[aria-pressed="true"]:hover {
+  background: rgb(var(--ink) / 0.8);
+}
+
 .icon-button:hover,
 .icon-button[aria-expanded="true"] {
   background: var(--muted);
-  color: #000;
+  color: rgb(var(--ink));
 }
 
 /* Settings -------------------------------------------------------------- */
 
-/* A popover hung off the gear, as in the web app, rather than a panel that
+.header-controls {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+/* A popover hung off the trigger, as in the web app, rather than a panel that
    pushes the content down. Aligned to the trigger's right edge. */
 .settings-anchor {
   position: relative;
@@ -133,7 +195,7 @@ svg {
   min-width: 260px;
   max-width: min(320px, calc(100vw - 2.25rem));
   border-radius: 0.75rem;
-  background: #fff;
+  background: var(--surface);
   box-shadow: 0 0 0 1px var(--hairline), 0 16px 50px rgb(0 0 0 / 0.12);
   padding: 1rem;
   text-align: left;
@@ -179,8 +241,77 @@ svg {
   margin-bottom: 0;
 }
 
-.settings .micro-label:not(#provider-label) {
+.settings .micro-label:not(#provider-label, #reasoning-label) {
   margin-top: 1.25rem;
+}
+
+/* Reasoning ------------------------------------------------------------- */
+
+/* The label and the current level share a row above the track, so the value is
+   readable without dragging. */
+.range-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 1.25rem;
+}
+
+.range-row .micro-label {
+  margin: 0;
+}
+
+.range-value {
+  color: var(--ink-70);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  text-transform: capitalize;
+}
+
+.range {
+  display: block;
+  width: 100%;
+  margin: 0.6rem 0 0;
+  appearance: none;
+  background: none;
+  cursor: pointer;
+}
+
+.range[hidden] {
+  display: none;
+}
+
+.range::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 999px;
+  background: rgb(var(--ink) / 0.12);
+}
+
+.range::-webkit-slider-thumb {
+  width: 0.875rem;
+  height: 0.875rem;
+  appearance: none;
+  margin-top: -0.34rem;
+  border-radius: 999px;
+  background: rgb(var(--ink));
+}
+
+.range:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+/* Claude Haiku exposes a single reasoning level, and a one-stop slider is a dead
+   control, so that case states the level instead. */
+.range-single {
+  margin: 0.5rem 0 0;
+  color: rgb(var(--ink) / 0.38);
+  font-size: 0.6875rem;
+  line-height: 1.45;
+}
+
+.range-single[hidden] {
+  display: none;
 }
 
 .segmented {
@@ -195,7 +326,7 @@ svg {
   gap: 0.4rem;
   height: 2.25rem;
   border: 1px solid var(--hairline);
-  background: #fff;
+  background: var(--surface);
   color: var(--ink-55);
   font-family: inherit;
   font-size: 0.75rem;
@@ -208,10 +339,18 @@ svg {
   height: 0.875rem;
 }
 
-/* The logos ship black, so the active segment inverts them to white, exactly as
-   the web app does. */
+/* The logos ship black, so they invert wherever they land on a dark ground: the
+   pressed segment in light mode, everything but it in dark mode. */
 .segment[aria-pressed="true"] img {
   filter: invert(1);
+}
+
+:root.dark .segment img {
+  filter: invert(1);
+}
+
+:root.dark .segment[aria-pressed="true"] img {
+  filter: none;
 }
 
 .segment:disabled img {
@@ -229,13 +368,13 @@ svg {
 
 .segment:hover:not([aria-pressed="true"]) {
   background: var(--muted);
-  color: #000;
+  color: rgb(var(--ink));
 }
 
 .segment[aria-pressed="true"] {
-  border-color: #000;
-  background: #000;
-  color: #fff;
+  border-color: rgb(var(--ink));
+  background: rgb(var(--ink));
+  color: var(--background);
 }
 
 .segment:disabled {
@@ -248,16 +387,16 @@ svg {
   width: 100%;
   height: 2.25rem;
   appearance: none;
-  border: 1px solid rgb(0 0 0 / 0.15);
+  border: 1px solid rgb(var(--ink) / 0.15);
   border-radius: 0.5rem;
-  background-color: #fff;
-  background-image: linear-gradient(45deg, transparent 50%, rgb(0 0 0 / 0.45) 50%),
-    linear-gradient(135deg, rgb(0 0 0 / 0.45) 50%, transparent 50%);
+  background-color: var(--surface);
+  background-image: linear-gradient(45deg, transparent 50%, rgb(var(--ink) / 0.45) 50%),
+    linear-gradient(135deg, rgb(var(--ink) / 0.45) 50%, transparent 50%);
   background-position: right 0.95rem center, right 0.65rem center;
   background-repeat: no-repeat;
   background-size: 5px 5px, 5px 5px;
   padding: 0 2rem 0 0.75rem;
-  color: #000;
+  color: rgb(var(--ink));
   font-family: inherit;
   font-size: 0.8125rem;
   cursor: pointer;
@@ -271,7 +410,7 @@ svg {
 
 .settings-note {
   margin: 1rem 0 0;
-  color: rgb(0 0 0 / 0.38);
+  color: rgb(var(--ink) / 0.38);
   font-size: 0.6875rem;
   line-height: 1.45;
 }
@@ -289,6 +428,20 @@ svg {
 .empty-state {
   padding: 4.5rem 0;
   text-align: center;
+}
+
+/* Sits above whichever state is on screen, so a run left behind on another tab
+   still announces itself. */
+.other-runs {
+  margin: 0 0 0.9rem;
+  color: var(--ink-40);
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  line-height: 1.45;
+}
+
+.other-runs[hidden] {
+  display: none;
 }
 
 .empty-title {
@@ -330,7 +483,7 @@ svg {
   align-items: center;
   gap: 0.5rem;
   margin: 0.375rem 0 0;
-  color: rgb(0 0 0 / 0.45);
+  color: rgb(var(--ink) / 0.45);
   font-size: 0.75rem;
 }
 
@@ -355,8 +508,8 @@ svg {
   margin-top: 1.25rem;
   border: 0;
   border-radius: 0.5rem;
-  background: #000;
-  color: #fff;
+  background: rgb(var(--ink));
+  color: var(--background);
   font-family: inherit;
   font-size: 0.8125rem;
   font-weight: 500;
@@ -370,7 +523,7 @@ svg {
 }
 
 .primary-button:hover {
-  background: rgb(0 0 0 / 0.8);
+  background: rgb(var(--ink) / 0.8);
 }
 
 .primary-button:active {
@@ -379,7 +532,7 @@ svg {
 
 .config-line {
   margin: 0.625rem 0 0;
-  color: rgb(0 0 0 / 0.38);
+  color: rgb(var(--ink) / 0.38);
   font-size: 0.6875rem;
   text-align: center;
 }
@@ -396,7 +549,7 @@ svg {
   border: 1px solid var(--hairline);
   border-radius: 0.65rem;
   padding: 0.8rem 0.9rem 0.9rem;
-  background: rgb(0 0 0 / 0.015);
+  background: rgb(var(--ink) / 0.015);
 }
 
 .loading-body {
@@ -419,7 +572,7 @@ svg {
 }
 
 .loading-elapsed {
-  color: rgb(0 0 0 / 0.48);
+  color: rgb(var(--ink) / 0.48);
   font-family: var(--font-mono);
   font-size: 0.6875rem;
   font-variant-numeric: tabular-nums;
@@ -432,14 +585,14 @@ svg {
   left: 0;
   height: 2px;
   overflow: hidden;
-  background: rgb(0 0 0 / 0.06);
+  background: rgb(var(--ink) / 0.06);
 }
 
 .loading-rail span {
   display: block;
   width: 28%;
   height: 100%;
-  background: #000;
+  background: rgb(var(--ink));
   animation: distilled-sweep 1.9s ease-in-out infinite;
 }
 
@@ -485,7 +638,7 @@ svg {
 }
 
 .timings-toggle:hover {
-  color: rgb(0 0 0 / 0.65);
+  color: rgb(var(--ink) / 0.65);
 }
 
 .timings-toggle svg {
@@ -503,13 +656,24 @@ svg {
   font-size: 1.375rem;
   font-weight: 600;
   letter-spacing: -0.04em;
+  text-wrap: balance;
+}
+
+.result-channel {
+  margin: 0.35rem 0 0;
+  font-size: 0.75rem;
+  color: rgb(var(--ink) / 0.45);
+}
+
+.result-channel:empty {
+  display: none;
 }
 
 .timings {
   margin-top: 0.75rem;
   border: 1px solid var(--hairline);
   border-radius: 0.5rem;
-  background: rgb(0 0 0 / 0.02);
+  background: rgb(var(--ink) / 0.02);
   padding: 0.6rem 0.7rem;
 }
 
@@ -522,21 +686,21 @@ svg {
   align-items: center;
   justify-content: space-between;
   padding: 0.2rem 0;
-  color: rgb(0 0 0 / 0.5);
+  color: rgb(var(--ink) / 0.5);
   font-size: 0.6875rem;
 }
 
 .timing-row span:last-child {
-  color: rgb(0 0 0 / 0.65);
+  color: rgb(var(--ink) / 0.65);
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
 }
 
 .timing-config {
   margin: 0.45rem 0 0;
-  border-top: 1px solid rgb(0 0 0 / 0.08);
+  border-top: 1px solid rgb(var(--ink) / 0.08);
   padding-top: 0.45rem;
-  color: rgb(0 0 0 / 0.35);
+  color: rgb(var(--ink) / 0.35);
   font-size: 0.625rem;
 }
 
@@ -562,7 +726,7 @@ svg {
 
 .ghost-button:hover {
   background: var(--muted);
-  color: #000;
+  color: rgb(var(--ink));
 }
 
 .marker-status {
@@ -587,7 +751,7 @@ svg {
   margin-top: 0.75rem;
   border: 1px solid var(--hairline);
   border-radius: 0.5rem;
-  background: rgb(0 0 0 / 0.015);
+  background: rgb(var(--ink) / 0.015);
   padding: 0.35rem 0.4rem 0.35rem 0.7rem;
 }
 
@@ -618,6 +782,13 @@ svg {
   gap: 0.5rem;
 }
 
+/* A grid item will not shrink below its content's minimum unless told to, and a
+   diagram is drawn at its own size. Without this the whole panel scrolls
+   sideways instead of the diagram's own box. */
+.section > div {
+  min-width: 0;
+}
+
 .section:first-child {
   border-top: 0;
   padding-top: 1rem;
@@ -625,7 +796,7 @@ svg {
 
 .section-number {
   margin: 0.2rem 0 0;
-  color: rgb(0 0 0 / 0.35);
+  color: rgb(var(--ink) / 0.35);
   font-family: var(--font-mono);
   font-size: 0.5625rem;
 }
@@ -682,29 +853,29 @@ svg {
 }
 
 .summary-markdown strong {
-  color: rgb(0 0 0 / 0.92);
+  color: rgb(var(--ink) / 0.92);
   font-weight: 650;
 }
 
 .summary-markdown h3,
 .summary-markdown h4 {
   margin: 1.2rem 0 0.5rem;
-  color: #000;
+  color: rgb(var(--ink));
   font-size: 0.875rem;
   font-weight: 650;
 }
 
 .summary-markdown a {
-  color: #000;
+  color: rgb(var(--ink));
   text-decoration: underline;
-  text-decoration-color: rgb(0 0 0 / 0.3);
+  text-decoration-color: rgb(var(--ink) / 0.3);
   text-underline-offset: 3px;
 }
 
 .summary-markdown blockquote {
-  border-left: 2px solid #000;
+  border-left: 2px solid rgb(var(--ink));
   padding-left: 0.8rem;
-  color: rgb(0 0 0 / 0.52);
+  color: rgb(var(--ink) / 0.52);
 }
 
 .summary-markdown table {
@@ -716,14 +887,14 @@ svg {
 
 .summary-markdown th,
 .summary-markdown td {
-  border-bottom: 1px solid rgb(0 0 0 / 0.12);
+  border-bottom: 1px solid rgb(var(--ink) / 0.12);
   padding: 0.55rem 0.6rem 0.55rem 0;
   text-align: left;
   vertical-align: top;
 }
 
 .summary-markdown th {
-  color: #000;
+  color: rgb(var(--ink));
   font-family: var(--font-mono);
   font-size: 0.5625rem;
   font-weight: 600;
@@ -734,11 +905,61 @@ svg {
 .summary-markdown code {
   border: 1px solid var(--hairline);
   border-radius: 0.3rem;
-  background: rgb(0 0 0 / 0.04);
+  background: rgb(var(--ink) / 0.04);
   padding: 0.1rem 0.3rem;
-  color: #000;
+  color: rgb(var(--ink));
   font-family: var(--font-mono);
   font-size: 0.84em;
+}
+
+/* Diagrams ---------------------------------------------------------------- */
+
+.summary-markdown .diagram {
+  margin: 1rem 0;
+  overflow-x: auto;
+  border: 1px solid var(--hairline);
+  border-radius: 0.5rem;
+  background: var(--surface);
+  padding: 0.75rem;
+}
+
+/* diagrams.js draws each diagram at its own size rather than letting mermaid
+   squeeze it into the column, so anything wider than the panel scrolls here. */
+.summary-markdown .diagram svg {
+  display: block;
+  height: auto;
+}
+
+/* The source stands in until the drawing arrives, and stays for good if mermaid
+   cannot draw it. */
+.summary-markdown .diagram-source {
+  margin: 0;
+  overflow-x: auto;
+}
+
+.summary-markdown .diagram-source code {
+  display: block;
+  border: 0;
+  background: none;
+  padding: 0;
+  white-space: pre;
+}
+
+.summary-markdown .diagram-drawn .diagram-source {
+  display: none;
+}
+
+.summary-markdown .diagram-note {
+  margin: 0 0 0.5rem;
+  color: rgb(var(--ink) / 0.45);
+  font-size: 0.7rem;
+}
+
+.summary-markdown .diagram-seek {
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: rgb(var(--ink) / 0.3);
+  text-underline-offset: 3px;
 }
 
 .timecode-link {
@@ -747,7 +968,7 @@ svg {
   border-radius: 0;
   background: none;
   padding: 0;
-  color: #000;
+  color: rgb(var(--ink));
   font-family: var(--font-mono);
   font-size: 0.88em;
   line-height: 1.2;
@@ -755,7 +976,7 @@ svg {
 }
 
 .timecode-link:hover {
-  border-bottom-color: #000;
+  border-bottom-color: rgb(var(--ink));
 }
 
 /* Error ----------------------------------------------------------------- */
@@ -766,9 +987,9 @@ svg {
   gap: 0.6rem;
   border: 1px solid var(--hairline);
   border-radius: 0.5rem;
-  background: rgb(0 0 0 / 0.015);
+  background: rgb(var(--ink) / 0.015);
   padding: 0.8rem 0.9rem;
-  color: rgb(0 0 0 / 0.65);
+  color: rgb(var(--ink) / 0.65);
 }
 
 .alert svg {

@@ -8,6 +8,24 @@
     <link rel="icon" type="image/png" sizes="64x64" href="/favicon-64.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <title>YouTube Distilled</title>
+    <!-- Resolves the theme before first paint. Deferring this to React would
+         flash a white page at every dark-mode load. Kept in sync with
+         src/theme.ts. -->
+    <script>
+      try {
+        var mode = localStorage.getItem("youtube-distilled-theme")
+        if (mode !== "light" && mode !== "dark") mode = "system"
+        var dark =
+          mode === "dark" ||
+          (mode === "system" && matchMedia("(prefers-color-scheme: dark)").matches)
+        if (dark) document.documentElement.classList.add("dark")
+        document
+          .querySelector('meta[name="theme-color"]')
+          .setAttribute("content", dark ? "#1e1e1e" : "#ffffff")
+      } catch (error) {
+        // Blocked storage just means the default light theme renders.
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>
