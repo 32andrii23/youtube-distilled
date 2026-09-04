@@ -1,12 +1,13 @@
 // Runs on youtube.com. It reports the open video, seeks the native player,
 // brackets the distilled watch moments just above YouTube's own progress bar,
-// and drains the color out of the page when grayscale focus is on.
+// plays those moments back to back on request, and drains the color out of the
+// page when grayscale focus is on.
 //
 // Content scripts are classic scripts, so this file has no static imports.
-// grayscale.js is the one exception, reached through a dynamic import: its
-// geometry needs to be unit-testable, which a classic script cannot offer.
-// Moment extraction stays in the panel; only finished plain data is accepted
-// here.
+// grayscale.js and tour.js are the exceptions, reached through dynamic imports:
+// their geometry and their stepping need to be unit-testable, which a classic
+// script cannot offer. Moment extraction stays in the panel; only finished
+// plain data is accepted here.
 
 const VIDEO_PATH_PATTERN = /^\/(?:shorts|live|embed)\/([A-Za-z0-9_-]{11})/
 const PROGRESS_CONTAINER_SELECTOR = ".ytp-progress-bar-container"
@@ -18,14 +19,16 @@ const OVERLAY_HIDDEN_CLASS = "ytd-distilled-marker-overlay-hidden"
 // instead of appearing to float over the video on their own.
 const CHROME_FADE = "0.25s cubic-bezier(0, 0, 0.2, 1)"
 const STRIP_CLASS = "ytd-distilled-grayscale-strip"
-// Must match the name panel.js connects with.
+// Must match the names panel.js connects with.
 const GRAYSCALE_PORT = "grayscale-focus"
+const TOUR_PORT = "moment-tour"
 const PLAYER_SELECTOR = ".html5-video-player"
 const MARKER_CLASS = "ytd-distilled-marker"
 const TICK_CLASS = "ytd-distilled-marker-tick"
 const RANGE_CLASS = "ytd-distilled-marker-range"
 const SHAPE_CLASS = "ytd-distilled-marker-shape"
 const LABEL_CLASS = "ytd-distilled-marker-label"
+const MARKER_ACTIVE_CLASS = "ytd-distilled-marker-active"
 const MARKER_HEIGHT = 9
 // A two-pixel upright is too thin to hover, so a single timecode gets a wider
 // hit area. It sits above the bar, so the extra width costs no seek precision.
@@ -42,6 +45,10 @@ let observedPlayer = null
 let observedVideo = null
 let renderedMoments = null
 let renderedDuration = null
+// The guide currently playing: { port, videoId, plan, index, video }, or null.
+let tour = null
+let tourModule = null
+let tourReady = null
 let syncFrame = null
 let grayscaleOn = false
 let grayscale = null
@@ -229,6 +236,23 @@ function ensureStyles() {
 
     .${MARKER_CLASS}:focus-visible .${SHAPE_CLASS} {
       filter: drop-shadow(0 0 2px #fff);
+    }
+
+    /* The period playing right now. Color rather than more weight: the tour
+       moves this mark from one period to the next while the viewer is watching
+       the picture, and a change of hue is caught at the edge of vision where a
+       change of thickness is not. It is the overlay's only color, and it is
+       YouTube's own red. */
+    .${MARKER_CLASS}.${MARKER_ACTIVE_CLASS} .${SHAPE_CLASS} {
+      height: calc(100% + 3px);
+    }
+
+    .${RANGE_CLASS}.${MARKER_ACTIVE_CLASS} .${SHAPE_CLASS} {
+      border-color: #f03;
+    }
+
+    .${TICK_CLASS}.${MARKER_ACTIVE_CLASS} .${SHAPE_CLASS} {
+      background: #f03;
     }
 
     .${LABEL_CLASS} {
@@ -454,6 +478,132 @@ function renderMarkers(moments) {
   renderedMoments = moments
   renderedDuration = null
   positionMarkers()
+  // The markers were just rebuilt, so a tour playing through them has to say
+  // again which one it is on.
+  highlightTourMarker()
+}
+
+/* Watch-guide tour -------------------------------------------------------- */
+
+// Plays the guide's periods one after another, skipping everything between
+// them. Planning and stepping live in tour.js so they can be tested without a
+// browser; what stays here is the part that needs a real player — reading the
+// playhead, seeking, and lighting the period being played.
+//
+// A tour belongs to the panel that started it. The panel that closes takes its
+// port down and the tour stops with it, which is the same bargain grayscale
+// focus makes and for the same reason: a closed panel leaves nothing on screen
+// able to stop what it started.
+
+function tourStatus() {
+  if (!tour) return { running: false, index: 0, total: 0, label: "" }
+  return {
+    running: true,
+    index: tour.index,
+    total: tour.plan.length,
+    label: tour.plan[tour.index]?.label ?? "",
+  }
+}
+
+function reportTour(port, videoId, reason, extra = {}) {
+  try {
+    port.postMessage({ videoId, reason, ...tourStatus(), ...extra })
+  } catch {
+    // The panel closed between the event and the post. Its port is about to
+    // disconnect, which stops the tour anyway.
+  }
+}
+
+function highlightTourMarker() {
+  if (!overlay) return
+
+  const playing = tour ? tour.plan[tour.index] : null
+  for (const marker of overlay.querySelectorAll(`.${MARKER_CLASS}`)) {
+    marker.classList.toggle(
+      MARKER_ACTIVE_CLASS,
+      Boolean(playing) && Number(marker.dataset.startSeconds) === playing.startSeconds,
+    )
+  }
+}
+
+function detachTour() {
+  if (!tour) return
+
+  tour.video.removeEventListener("timeupdate", onTourTime)
+  tour.video.removeEventListener("ended", onTourEnded)
+  tour = null
+  highlightTourMarker()
+}
+
+function stopTour(reason) {
+  if (!tour) return
+
+  const { port, videoId } = tour
+  detachTour()
+  reportTour(port, videoId, reason)
+}
+
+// The last period has played. Pausing is the honest ending: rolling on into the
+// part the model left out is the exact thing the guide exists to skip.
+function endTour() {
+  const { port, videoId, video, plan } = tour
+  detachTour()
+  video.pause()
+  // The plan is gone by now, so the length it had rides along: a panel saying
+  // "played all six" needs the six.
+  reportTour(port, videoId, "finished", { total: plan.length })
+}
+
+function onTourEnded() {
+  if (tour) endTour()
+}
+
+// timeupdate rather than a frame loop: it keeps firing in a backgrounded tab,
+// where requestAnimationFrame stops and would leave the tour playing straight
+// through the end of a period.
+function onTourTime() {
+  if (!tour || !tourModule) return
+
+  const step = tourModule.tourStep(tour.plan, tour.index, tour.video.currentTime)
+  if (step.done) {
+    endTour()
+    return
+  }
+
+  if (step.index !== tour.index) {
+    tour.index = step.index
+    highlightTourMarker()
+    reportTour(tour.port, tour.videoId, "playing")
+  }
+  // Assigning currentTime on a playing video leaves it playing, so the jump to
+  // the next period needs nothing more than this.
+  if (step.seekTo !== null) tour.video.currentTime = step.seekTo
+}
+
+async function startTour(port, videoId) {
+  await tourReady
+  detachTour()
+
+  const moments = momentsByVideoId.get(videoId)
+  const video = findVideoElement()
+  const duration = video?.duration
+  const plan = tourModule && moments?.length && video && videoId === readVideoId()
+    ? tourModule.tourPlan(moments, { duration: Number.isFinite(duration) ? duration : null })
+    : []
+  if (!plan.length) {
+    reportTour(port, videoId, "unavailable")
+    return
+  }
+
+  tour = { port, videoId, plan, index: 0, video }
+  video.addEventListener("timeupdate", onTourTime)
+  video.addEventListener("ended", onTourEnded)
+  highlightTourMarker()
+  // The one seek that scrolls the player into view. The jumps after it happen
+  // while the viewer is already watching, and moving the page under them then
+  // would be the opposite of helpful.
+  seek(plan[0].startSeconds)
+  reportTour(port, videoId, "started")
 }
 
 function updateOverlayGeometry() {
@@ -576,6 +726,8 @@ function syncPlayer() {
   const nextVideoId = readVideoId()
   if (nextVideoId !== activeVideoId) {
     activeVideoId = nextVideoId
+    // The tab moved on from the video whose guide was playing.
+    stopTour("stopped")
     disconnectPlayer()
   }
 
@@ -588,6 +740,9 @@ function syncPlayer() {
   const container = document.querySelector(PROGRESS_CONTAINER_SELECTOR)
   const bar = container?.querySelector(PROGRESS_BAR_SELECTOR)
   const video = findVideoElement()
+  // YouTube replaced the element the tour was driving, so its plan has nothing
+  // left to play and its listeners are on an element nobody is watching.
+  if (tour && tour.video !== video) stopTour("stopped")
   if (!container || !bar || !video) {
     disconnectPlayer()
     return
@@ -641,12 +796,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === "set-moments" && typeof message.videoId === "string") {
     const moments = normalizeMoments(message.moments)
     momentsByVideoId.set(message.videoId, moments)
+    // A second brief for the same video retires the plan built from the first.
+    if (tour?.videoId === message.videoId) stopTour("stopped")
     scheduleSync()
     sendResponse({ ok: true, moments: moments.length })
     return false
   }
   if (message?.type === "clear-moments" && typeof message.videoId === "string") {
     momentsByVideoId.delete(message.videoId)
+    if (tour?.videoId === message.videoId) stopTour("stopped")
     if (message.videoId === activeVideoId) disconnectPlayer()
     sendResponse({ ok: true })
     return false
@@ -675,6 +833,31 @@ chrome.runtime.onConnect.addListener((port) => {
   })
 })
 
+// The tour is driven over a port of its own rather than one-off messages, and
+// that is the point: the port dying is how a closing panel stops a tour it can
+// no longer show a button for.
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== TOUR_PORT) return
+
+  port.onMessage.addListener((message) => {
+    if (message?.action === "start" && typeof message.videoId === "string") {
+      startTour(port, message.videoId)
+      return
+    }
+    if (message?.action === "stop") {
+      if (tour?.port === port) stopTour("stopped")
+      // A panel asking to stop a tour that already ended still deserves an
+      // answer, or its button would sit on "Stop" with nothing behind it.
+      else reportTour(port, message?.videoId ?? activeVideoId, "stopped")
+    }
+  })
+
+  port.onDisconnect.addListener(() => {
+    // Nothing to report to: the thing that would have heard it is what went.
+    if (tour?.port === port) detachTour()
+  })
+})
+
 window.addEventListener("yt-navigate-finish", () => {
   scheduleSync()
   scheduleStripUpdate()
@@ -695,7 +878,15 @@ async function startGrayscale() {
   updateStrips()
 }
 
+// tour.js is a module for the same reason grayscale.js is. Nothing waits on the
+// round trip: the earliest a tour can be asked for is a click away, by which
+// time this has long landed, and startTour() awaits it regardless.
+async function startTourModule() {
+  tourModule = await import(chrome.runtime.getURL("tour.js"))
+}
+
 function stopWatching() {
+  stopTour("stopped")
   if (syncFrame !== null) window.cancelAnimationFrame(syncFrame)
   syncFrame = null
   if (stripFrame !== null) window.cancelAnimationFrame(stripFrame)
@@ -716,6 +907,7 @@ window.addEventListener("pageshow", startWatching)
 ensureStyles()
 startWatching()
 startGrayscale().catch(() => undefined)
+tourReady = startTourModule().catch(() => undefined)
 
 // An open panel cannot know about a tab that did not exist when it last looked,
 // and this script is the first thing in the tab that does. The same message the

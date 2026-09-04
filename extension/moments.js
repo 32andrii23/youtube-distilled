@@ -7,6 +7,10 @@ import { TIMECODE_PATTERN, timecodeToSeconds } from "./markdown.js"
 const HEADING_PATTERN = /^(#{1,6})\s+(.+)$/
 const FENCE_PATTERN = /^ {0,3}(`{3,}|~{3,})/
 const TABLE_DIVIDER_CELL_PATTERN = /^:?-{3,}:?$/
+// The guide opens with the total watch time it adds up to. Written as words
+// that is inert, but a model that writes "Total: 4:30" would otherwise plant a
+// marker at 4:30 that nobody picked.
+const TOTAL_LINE_PATTERN = /^[\s\-–—*_>]*total\b/i
 const LABEL_LIMIT = 80
 
 function timecodeMatches(text) {
@@ -159,16 +163,30 @@ function watchGuideLines(markdown) {
       break
     }
   }
-  return lines.slice(headingIndex + 1, end)
+  return lines.slice(headingIndex + 1, end).filter((line) => !TOTAL_LINE_PATTERN.test(line))
 }
 
 function momentsFromLines(lines) {
   return lines.flatMap(momentsFromLine)
 }
 
+// The model picks the moments row by row, so two of them can claim overlapping
+// stretches of the video. On the seek bar that draws brackets on top of each
+// other with hit areas that fight, so an earlier range ends where the next
+// moment starts. Clipping keeps every pick and every start time, which is what
+// the marker actually seeks to.
+function disjoint(moments) {
+  return moments.map((moment, index) => {
+    const nextStart = moments[index + 1]?.startSeconds
+    if (moment.endSeconds === null || nextStart === undefined) return moment
+    if (moment.endSeconds <= nextStart) return moment
+    return { ...moment, endSeconds: nextStart }
+  })
+}
+
 function finish(moments) {
   const seen = new Set()
-  return moments
+  const ordered = moments
     .filter((moment) => moment.label)
     .filter((moment) => {
       if (seen.has(moment.startSeconds)) return false
@@ -176,6 +194,10 @@ function finish(moments) {
       return true
     })
     .sort((left, right) => left.startSeconds - right.startSeconds)
+
+  // Starts are unique and ascending by here, so clipping to the next start
+  // always leaves a range that still begins before it ends.
+  return disjoint(ordered)
 }
 
 export function extractMoments(markdown) {

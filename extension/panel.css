@@ -28,6 +28,13 @@
   --ink-70: rgb(var(--ink) / 0.7);
   --header-bg: rgb(255 255 255 / 0.88);
   --gutter: 1.125rem;
+
+  /* The only chroma in the panel. The verdict badge has to be readable before
+     any of its words are, and a monochrome badge cannot say "skip" at a glance.
+     Confined to that badge: everything else stays grey on purpose. */
+  --verdict-watch: oklch(0.52 0.13 152);
+  --verdict-skim: oklch(0.56 0.12 72);
+  --verdict-skip: oklch(0.53 0.17 25);
 }
 
 /* Mirrors the .dark ramp in src/index.css so the two surfaces stay one product. */
@@ -43,6 +50,11 @@
 
   --ink: 255 255 255;
   --header-bg: rgb(30 30 30 / 0.88);
+
+  /* Lifted for contrast against the dark ground; the same three hues. */
+  --verdict-watch: oklch(0.74 0.15 152);
+  --verdict-skim: oklch(0.79 0.14 78);
+  --verdict-skip: oklch(0.68 0.18 25);
 }
 
 * {
@@ -729,6 +741,23 @@ svg {
   color: rgb(var(--ink));
 }
 
+/* The result's own action, so it reads a shade above Copy and New without
+   becoming a second primary button. */
+.tour-button {
+  color: rgb(var(--ink));
+}
+
+.tour-button[data-running="true"] {
+  background: var(--muted);
+}
+
+.tour-button:disabled,
+.tour-button:disabled:hover {
+  background: none;
+  color: var(--ink-40);
+  cursor: default;
+}
+
 .marker-status {
   margin: 0 0 0.65rem;
   color: var(--ink-40);
@@ -773,6 +802,82 @@ svg {
 }
 
 /* Sections -------------------------------------------------------------- */
+
+/* Verdict ---------------------------------------------------------------- */
+
+.verdict {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.875rem;
+  margin: 1rem 0 0.25rem;
+  border: 1px solid var(--hairline);
+  border-radius: calc(var(--radius) * 1.2);
+  padding: 0.875rem;
+}
+
+.verdict-watch {
+  --verdict: var(--verdict-watch);
+}
+
+.verdict-skim {
+  --verdict: var(--verdict-skim);
+}
+
+.verdict-skip {
+  --verdict: var(--verdict-skip);
+}
+
+.verdict-badge {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 0.125rem;
+  width: 3.25rem;
+  height: 3.25rem;
+  border-radius: var(--radius);
+  background: color-mix(in oklab, var(--verdict) 12%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--verdict) 32%, transparent);
+}
+
+.verdict-score {
+  color: var(--verdict);
+  font-family: var(--font-mono);
+  font-size: 1.1875rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.verdict-scale {
+  color: rgb(var(--ink) / 0.35);
+  font-family: var(--font-mono);
+  font-size: 0.5rem;
+  line-height: 1;
+}
+
+.verdict-label {
+  margin: 0.125rem 0 0;
+  color: var(--verdict);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.verdict-note {
+  color: var(--ink-40);
+  font-weight: 400;
+}
+
+.verdict-reason {
+  margin: 0.3125rem 0 0;
+  color: var(--ink-70);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+/* Sections ---------------------------------------------------------------- */
 
 .section {
   border-top: 1px solid var(--hairline);
@@ -928,6 +1033,14 @@ svg {
 .summary-markdown .diagram svg {
   display: block;
   height: auto;
+}
+
+/* A sankey fills its node bars from d3's categorical palette, written straight
+   onto the rect as a fill attribute — the one place colour still reaches a
+   brief. The ribbons between them are greyed through mermaid's own config, in
+   DIAGRAM_CONFIG. A rule of any specificity beats a presentation attribute. */
+.summary-markdown .diagram .node rect {
+  fill: rgb(var(--ink) / 0.32);
 }
 
 /* The source stands in until the drawing arrives, and stays for good if mermaid

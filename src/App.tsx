@@ -1,4 +1,5 @@
 import {
+  type CSSProperties,
   type FormEvent,
   memo,
   type PointerEvent as ReactPointerEvent,
@@ -27,6 +28,7 @@ import {
 } from "lucide-react"
 import ReactMarkdown, { type Components } from "react-markdown"
 import remarkGfm from "remark-gfm"
+import { extractVerdict, isVerdictHeading } from "../extension/verdict.js"
 import claudeLogo from "@lobehub/icons-static-svg/icons/claude.svg"
 import chatGptLogo from "@lobehub/icons-static-svg/icons/openai.svg"
 
@@ -384,7 +386,13 @@ export default function App() {
   const playerDragOffsetRef = useRef({ x: 0, y: 0 })
   const playerPositionRef = useRef<PlayerPosition | null>(null)
   const playerDraggingRef = useRef(false)
-  const sections = useMemo(() => splitSummary(summary), [summary])
+  const verdict = useMemo(() => extractVerdict(summary), [summary])
+  // The verdict is rendered as the badge above, so leaving it in the list would
+  // print it twice and push every other section's number up by one.
+  const sections = useMemo(
+    () => splitSummary(summary).filter((section) => !isVerdictHeading(section.title)),
+    [summary],
+  )
   const videoId = getVideoId(videoUrl)
   const provider = providers[settings.provider]
   const selectedModel = provider.models.find((model) => model.id === settings.model) ?? provider.models[0]
@@ -1018,6 +1026,41 @@ export default function App() {
                 </Button>
               </div>
             </div>
+
+            {/* The call, before the brief that argues for it. The number is
+                the whole point of the block: a glance at it decides whether the
+                nine sections below are worth opening at all. */}
+            {verdict && (
+              <div
+                className="mb-10 flex items-start gap-4 rounded-xl border border-foreground/10 p-4 sm:items-center sm:gap-5 sm:p-5"
+                style={{ "--verdict": `var(--verdict-${verdict.tone})` } as CSSProperties}
+              >
+                <div
+                  className="flex size-14 shrink-0 flex-col items-center justify-center gap-0.5 rounded-lg"
+                  style={{
+                    background: "color-mix(in oklab, var(--verdict) 12%, transparent)",
+                    boxShadow: "inset 0 0 0 1px color-mix(in oklab, var(--verdict) 32%, transparent)",
+                  }}
+                >
+                  <span
+                    className="font-mono text-xl font-semibold leading-none tabular-nums"
+                    style={{ color: "var(--verdict)" }}
+                  >
+                    {verdict.score}
+                  </span>
+                  <span className="font-mono text-[9px] leading-none text-foreground/35">/100</span>
+                </div>
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold tracking-[-0.01em]" style={{ color: "var(--verdict)" }}>
+                    {verdict.label}
+                    <span className="font-normal text-foreground/40"> · {verdict.note}</span>
+                  </p>
+                  {verdict.reason && (
+                    <p className="mt-1.5 text-sm leading-6 text-foreground/70">{verdict.reason}</p>
+                  )}
+                </div>
+              </div>
+            )}
 
             <div>
               {sections.map((section, index) => (

@@ -1,12 +1,12 @@
 // Draws a mermaid diagram from the brief. The analysis writes these as fenced
-// mermaid blocks in section 9; timecoded diagram types carry a real timestamp on
-// every node, and those labels become seek controls for the floating player.
+// mermaid blocks in section 9, and any label carrying a timecode becomes a seek
+// control for the floating player.
 
 import { memo, useEffect, useId, useRef, useState } from "react"
 
-import { repairMermaid } from "../extension/mermaid-repair.js"
+import { mermaidCandidates } from "../extension/mermaid-repair.js"
 import type { ResolvedTheme } from "./theme"
-import { DIAGRAM_THEME_VARIABLES } from "./theme"
+import { DIAGRAM_CONFIG, DIAGRAM_THEME_VARIABLES } from "./theme"
 import { TIMECODE_PATTERN, timecodeToSeconds } from "./timecodes"
 
 // Mermaid puts labels in SVG <text> for some diagram types and in HTML inside a
@@ -20,10 +20,16 @@ function firstTimecode(text: string) {
 
 type Mermaid = typeof import("mermaid")["default"]
 
-async function repaired(mermaid: Mermaid, source: string) {
-  const candidate = repairMermaid(source)
-  if (candidate === source) return null
-  return (await mermaid.parse(candidate, { suppressErrors: true })) ? candidate : null
+// Model-written mermaid needs fixing often enough that this is the expected
+// path, not the exceptional one. mermaidCandidates hands back the sources worth
+// trying, best first; suppressErrors returns false rather than throwing, so each
+// can be offered to the parser in turn and only a version mermaid accepts is
+// ever drawn.
+async function drawable(mermaid: Mermaid, source: string) {
+  for (const candidate of mermaidCandidates(source)) {
+    if (await mermaid.parse(candidate, { suppressErrors: true })) return candidate
+  }
+  return null
 }
 
 // Memoised because a brief is re-rendered on every keystroke in the follow-up
@@ -56,22 +62,19 @@ export default memo(function MermaidDiagram({
         securityLevel: "strict",
         theme: "base",
         themeVariables: DIAGRAM_THEME_VARIABLES[theme],
+        // No sizing here: the app's column is wide enough to let mermaid scale
+        // a drawing to fit, which is what the panel cannot do.
+        ...DIAGRAM_CONFIG[theme],
       })
 
-      // Model-written mermaid is invalid often enough that this is the expected
-      // path, not the exceptional one. suppressErrors returns false, not throws,
-      // so a source that will not parse gets the repairs applied and one more
-      // try. Only the version that parses is ever drawn.
-      const drawable = (await mermaid.parse(source, { suppressErrors: true }))
-        ? source
-        : await repaired(mermaid, source)
+      const accepted = await drawable(mermaid, source)
       if (cancelled) return
-      if (!drawable) {
+      if (!accepted) {
         setFailed(true)
         return
       }
 
-      const result = await mermaid.render(renderId, drawable)
+      const result = await mermaid.render(renderId, accepted)
       if (!cancelled) setSvg(result.svg)
     }
 

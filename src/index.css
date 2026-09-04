@@ -65,6 +65,13 @@
      Flipping it in .dark turns black-alpha into white-alpha in one move, which is
      what those surfaces need. Alpha values are unchanged from the light design. */
   --ink: 0 0 0;
+
+  /* The only chroma in the palette. The verdict badge has to be readable before
+     any of its words are, and a monochrome badge cannot say "skip" at a glance.
+     Confined to that badge: everything else stays grey on purpose. */
+  --verdict-watch: oklch(0.52 0.13 152);
+  --verdict-skim: oklch(0.56 0.12 72);
+  --verdict-skip: oklch(0.53 0.17 25);
 }
 
 /* Greyscale throughout, matching the product's monochrome identity. */
@@ -91,6 +98,11 @@
   color-scheme: dark;
 
   --ink: 255 255 255;
+
+  /* Lifted for contrast against the dark ground; the same three hues. */
+  --verdict-watch: oklch(0.74 0.15 152);
+  --verdict-skim: oklch(0.79 0.14 78);
+  --verdict-skip: oklch(0.68 0.18 25);
 }
 
 @layer base {
@@ -305,6 +317,14 @@
 .summary-markdown .diagram svg {
   max-width: 100%;
   height: auto;
+}
+
+/* A sankey fills its node bars from d3's categorical palette, written straight
+   onto the rect as a fill attribute — the one place colour still reaches a
+   brief. The ribbons between them are greyed through mermaid's own config, in
+   DIAGRAM_CONFIG. A rule of any specificity beats a presentation attribute. */
+.summary-markdown .diagram .node rect {
+  fill: rgb(var(--ink) / 0.32);
 }
 
 .summary-markdown .diagram-seek {

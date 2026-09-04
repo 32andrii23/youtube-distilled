@@ -8,7 +8,7 @@
 // scrolling to a diagram, and the bundle is several megabytes.
 
 import { TIMECODE_PATTERN, timecodeToSeconds } from "./markdown.js"
-import { repairMermaid } from "./mermaid-repair.js"
+import { mermaidCandidates } from "./mermaid-repair.js"
 
 const MERMAID_URL = "vendor/mermaid.min.js"
 
@@ -25,6 +25,23 @@ export const DIAGRAM_THEME_VARIABLES = {
     lineColor: "rgba(0, 0, 0, 0.35)",
     textColor: "rgba(0, 0, 0, 0.78)",
     fontSize: "13px",
+    // An xychart takes none of its colour from the variables above: it paints
+    // its own background and draws from its own pastel palette. Left alone it
+    // puts a near-invisible yellow line on white, and in a dark brief it puts a
+    // white chart with white-on-white axis labels in the middle of the page.
+    xyChart: {
+      backgroundColor: "#ffffff",
+      titleColor: "#000000",
+      plotColorPalette: "#3d3d3d,#7a7a7a,#b3b3b3",
+      xAxisLabelColor: "rgba(0, 0, 0, 0.78)",
+      xAxisTitleColor: "rgba(0, 0, 0, 0.78)",
+      xAxisLineColor: "rgba(0, 0, 0, 0.35)",
+      xAxisTickColor: "rgba(0, 0, 0, 0.35)",
+      yAxisLabelColor: "rgba(0, 0, 0, 0.78)",
+      yAxisTitleColor: "rgba(0, 0, 0, 0.78)",
+      yAxisLineColor: "rgba(0, 0, 0, 0.35)",
+      yAxisTickColor: "rgba(0, 0, 0, 0.35)",
+    },
   },
   dark: {
     background: "#1e1e1e",
@@ -36,8 +53,47 @@ export const DIAGRAM_THEME_VARIABLES = {
     lineColor: "rgba(255, 255, 255, 0.4)",
     textColor: "rgba(255, 255, 255, 0.8)",
     fontSize: "13px",
+    xyChart: {
+      backgroundColor: "#1e1e1e",
+      titleColor: "#f5f5f5",
+      plotColorPalette: "#e6e6e6,#a3a3a3,#6e6e6e",
+      xAxisLabelColor: "rgba(255, 255, 255, 0.8)",
+      xAxisTitleColor: "rgba(255, 255, 255, 0.8)",
+      xAxisLineColor: "rgba(255, 255, 255, 0.4)",
+      xAxisTickColor: "rgba(255, 255, 255, 0.4)",
+      yAxisLabelColor: "rgba(255, 255, 255, 0.8)",
+      yAxisTitleColor: "rgba(255, 255, 255, 0.8)",
+      yAxisLineColor: "rgba(255, 255, 255, 0.4)",
+      yAxisTickColor: "rgba(255, 255, 255, 0.4)",
+    },
   },
 }
+
+// Mermaid config, as opposed to theme variables, that both surfaces need. Keyed
+// by theme because the one thing in it is a colour.
+export const DIAGRAM_CONFIG = {
+  // A sankey draws its ribbons as a colour gradient between the two ends, which
+  // is the only colour left in an otherwise greyscale brief. The node bars carry
+  // a fill attribute rather than a config value, so the stylesheets grey those.
+  light: { sankey: { linkColor: "#c4c4c4" } },
+  dark: { sankey: { linkColor: "#4a4a4a" } },
+}
+
+// Mermaid's own name for each type the analysis may draw, which is not always
+// the name the diagram opens with: a `stateDiagram-v2` is configured as `state`
+// and an `xychart-beta` as `xyChart`. tests/diagrams.test.ts checks this against
+// the types backend/prompt.py offers.
+export const DIAGRAM_TYPE_KEYS = [
+  "flowchart",
+  "mindmap",
+  "state",
+  "sequence",
+  "quadrantChart",
+  "er",
+  "timeline",
+  "sankey",
+  "xyChart",
+]
 
 // Mermaid puts labels in SVG <text> for some diagram types and in HTML inside a
 // <foreignObject> for others, so both have to be swept to find every label.
@@ -48,15 +104,12 @@ const LABEL_SELECTOR = "text, foreignObject span, foreignObject p, foreignObject
 // its size, with labels too small to read. Each diagram is drawn at its own size
 // instead and the box it sits in scrolls sideways, the way a wide table already
 // does here. useMaxWidth is per diagram type, so every type the analysis is
-// allowed to use has to say it.
-const FIT_TO_CONTENT = { useMaxWidth: false }
-const DIAGRAM_SIZING = {
-  flowchart: FIT_TO_CONTENT,
-  sequence: FIT_TO_CONTENT,
-  timeline: FIT_TO_CONTENT,
-  mindmap: FIT_TO_CONTENT,
-  quadrantChart: FIT_TO_CONTENT,
-  sankey: FIT_TO_CONTENT,
+// allowed to use has to say it — and has to say it on top of whatever config
+// that type already carries, rather than in place of it.
+export function fitToContent(config) {
+  return Object.fromEntries(
+    DIAGRAM_TYPE_KEYS.map((key) => [key, { ...config[key], useMaxWidth: false }]),
+  )
 }
 
 // The bundle is a classic script that hangs mermaid off globalThis. One load per
@@ -119,16 +172,16 @@ function markFailed(container) {
   container.prepend(note)
 }
 
-// Model-written mermaid is invalid often enough that this is an expected path,
-// not an exceptional one. suppressErrors returns false rather than throwing, so
-// a source that will not parse can be run through the repairs and tried again —
-// and only the version that parses is ever drawn.
+// Model-written mermaid needs fixing often enough that this is an expected path,
+// not an exceptional one. mermaidCandidates hands back the sources worth trying,
+// best first; suppressErrors returns false rather than throwing, so each can be
+// offered to the parser in turn and only a version mermaid accepts is ever
+// drawn.
 async function drawable(mermaid, source) {
-  if (await mermaid.parse(source, { suppressErrors: true })) return source
-
-  const repaired = repairMermaid(source)
-  if (repaired === source) return null
-  return (await mermaid.parse(repaired, { suppressErrors: true })) ? repaired : null
+  for (const candidate of mermaidCandidates(source)) {
+    if (await mermaid.parse(candidate, { suppressErrors: true })) return candidate
+  }
+  return null
 }
 
 async function draw(mermaid, container) {
@@ -180,7 +233,7 @@ export async function drawDiagrams(root, theme) {
     securityLevel: "strict",
     theme: "base",
     themeVariables: DIAGRAM_THEME_VARIABLES[theme] ?? DIAGRAM_THEME_VARIABLES.light,
-    ...DIAGRAM_SIZING,
+    ...fitToContent(DIAGRAM_CONFIG[theme] ?? DIAGRAM_CONFIG.light),
   })
 
   // One at a time: mermaid is a singleton that renders through shared state, and

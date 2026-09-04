@@ -17,8 +17,10 @@ YouTube Distilled is a minimal, local-first web app for extracting the signal fr
 
 ## Highlights
 
+- **A watch-or-skip verdict up front** — every brief opens with a 0-100 relevance score, colour-coded to watch, skim, or skip, and one line saying what earned it. Scored against a viewer profile in the prompt, so it answers "is this worth *my* time" rather than "is this a good video".
 - **Dense, predictable briefs** — summary, key takeaways, concepts, practical uses, critical view, and final compression.
-- **A ten-minute watch guide** — only the most valuable source-backed moments, with clickable timecodes.
+- **A watch guide of ten minutes or less** — only the most valuable source-backed moments, with clickable timecodes and the total watch time up front. Ten minutes is a ceiling: a video whose value fits in two gets two.
+- **Play the guide, not the video** — one button in the extension plays the picked periods back to back, jumping from the end of each to the start of the next, so a forty-minute video is watched in the four minutes that earned it.
 - **Floating YouTube player** — opens at the selected moment, snaps to any corner, and toggles fullscreen.
 - **Codex or Claude** — choose the provider, model, and reasoning level from the settings menu.
 - **Visible performance** — see the total run time and expand a per-step timing breakdown.
@@ -92,11 +94,18 @@ Every brief follows the same useful structure:
 6. Practical use
 7. Critical view
 8. Final compression
-9. Diagrams — only where a picture says something the prose cannot, drawn with
-   seekable timecodes on every node
+9. Diagrams — the shape of what the video says, not a picture of its running
+   order: the structure holding up an argument, the loop inside a mechanism, the
+   options on the axes a review actually judges them on. The analysis picks the
+   form from what the video is, out of nine mermaid types, and draws nothing when
+   nothing has a shape worth drawing. Timecodes ride along on the nodes that have
+   one, where they become seek controls.
 
-A brief is headed by the video's own title and channel, and mermaid a model got
-slightly wrong is repaired before it is drawn rather than shown as a failure.
+A brief is headed by the video's own title and channel. Mermaid a model got
+slightly wrong is repaired before it is drawn rather than shown as a failure, and
+mermaid that would have parsed cleanly while drawing the wrong picture — a state
+name quietly cut in half, an axis title with its spaces stripped — is corrected
+first.
 
 ## Chrome extension
 
@@ -106,7 +115,9 @@ click the toolbar icon.
 
 It talks to the same local API, so start the app first; when the service is not
 running the panel says so and offers the command to copy. Timecodes drive the
-tab's own player rather than opening a second one, so playback stays native.
+tab's own player rather than opening a second one, so playback stays native, and
+**Play moments** runs the whole watch guide through that player without you
+touching the scrubber.
 
 See [`extension/README.md`](extension/README.md) for details.
 

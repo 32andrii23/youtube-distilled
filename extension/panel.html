@@ -158,6 +158,9 @@
         <div id="timings" class="timings" hidden></div>
 
         <div class="result-actions">
+          <!-- Plays the watch guide's periods back to back in the video's own
+               tab, skipping everything between them. -->
+          <button type="button" id="tour" class="ghost-button tour-button">Play moments</button>
           <button type="button" id="copy" class="ghost-button">Copy</button>
           <a id="open-video" class="ghost-button" target="_blank" rel="noreferrer">Video</a>
           <button type="button" id="reset" class="ghost-button">New</button>
@@ -165,6 +168,7 @@
         <p id="marker-status" class="marker-status" aria-live="polite"></p>
 
         <div id="result-notice"></div>
+        <div id="verdict"></div>
         <div id="sections"></div>
       </section>
 

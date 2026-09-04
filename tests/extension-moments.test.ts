@@ -52,6 +52,23 @@ test("preserves the end of a timecode range", () => {
   ])
 })
 
+test("clips overlapping and nested periods so the ranges stay disjoint", () => {
+  const brief = `
+## I only have 10 minutes
+| Title | Time | Why this part matters |
+| --- | ---: | --- |
+| Setup | 01:00–05:00 | Frames the problem |
+| Method | 03:00–04:00 | Nested inside the setup range |
+| Payoff | 03:30–06:00 | Overlaps the method range |
+`
+
+  assert.deepEqual(extractMoments(brief), [
+    { startSeconds: 60, endSeconds: 180, label: "Frames the problem" },
+    { startSeconds: 180, endSeconds: 210, label: "Nested inside the setup range" },
+    { startSeconds: 210, endSeconds: 360, label: "Overlaps the method range" },
+  ])
+})
+
 test("falls back to every timecode when the guide has none", () => {
   const brief = `
 ## I only have 10 minutes
@@ -169,4 +186,19 @@ test("still finds prose moments alongside a diagram", () => {
   const moments = extractMoments(markdown)
   assert.equal(moments.length, 1)
   assert.equal(moments[0].startSeconds, 300)
+})
+
+test("ignores the total watch time line, even written as a clock value", () => {
+  const brief = `
+## 3. “I Only Have 10 Minutes” Watch Guide
+Total: 4:30 of watching.
+
+| Title | Time | Why this part matters |
+| --- | ---: | --- |
+| Demo | 04:12–07:40 | Makes the method concrete |
+`
+
+  assert.deepEqual(extractMoments(brief), [
+    { startSeconds: 252, endSeconds: 460, label: "Makes the method concrete" },
+  ])
 })

@@ -13,6 +13,8 @@ import { renderMarkdown, splitSummary } from "./markdown.js"
 import { extractMoments } from "./moments.js"
 import { DEFAULT_SETTINGS, FALLBACK_PROVIDERS, isSelectableProvider, normalizeSettings as normalizeSettingsFromCatalog } from "./provider-catalog.js"
 import { describeRunsElsewhere, runsElsewhere } from "./runs.js"
+import { tourPlan, tourSeconds } from "./tour.js"
+import { extractVerdict, isVerdictHeading } from "./verdict.js"
 import {
   applyTheme,
   DARK_MEDIA_QUERY,
@@ -26,8 +28,13 @@ const API_URL = "http://127.0.0.1:4322"
 const SETTINGS_KEY = "youtube-distilled-settings"
 const NOTICE_TIMEOUT_MS = 6000
 const YOUTUBE_TABS = "https://www.youtube.com/*"
-// Must match the name content.js accepts.
+// Must match the names content.js accepts.
 const GRAYSCALE_PORT = "grayscale-focus"
+const TOUR_PORT = "moment-tour"
+
+// What the panel knows about a run's tour before the content script says
+// otherwise. `pending` covers the moment between the click and the answer.
+const IDLE_TOUR = { running: false, pending: false, index: 0, total: 0, label: "", reason: "" }
 
 const PROVIDER_LABELS = { codex: "Codex", claude: "Claude" }
 const PROVIDER_ICONS = { codex: "icons/codex.svg", claude: "icons/claude.svg" }
@@ -87,11 +94,13 @@ const ui = {
   copy: element("copy"),
   openVideo: element("open-video"),
   reset: element("reset"),
+  tour: element("tour"),
   markerStatus: element("marker-status"),
   otherRuns: element("other-runs"),
   resultTitle: element("result-title"),
   resultChannel: element("result-channel"),
   notice: element("result-notice"),
+  verdict: element("verdict"),
   sections: element("sections"),
   errorMessage: element("error-message"),
   errorReset: element("error-reset"),
@@ -106,9 +115,12 @@ let resolvedTheme = "light"
 let grayscaleOn = false
 // tabId -> the port carrying grayscale focus to that tab's content script.
 const grayscalePorts = new Map()
+// tabId -> the port carrying the watch-guide tour to that tab's content script.
+const tourPorts = new Map()
 let state = "no-video"
 let currentVideo = null
-// videoId -> { video, state, startedAt, settings, brief, momentCount, error }.
+// videoId -> { video, state, startedAt, settings, brief, momentCount, tourSeconds,
+// tour, error }.
 // A run outlives the tab switch that hides it, so nothing is lost by reading
 // another video while it works.
 const runs = new Map()
@@ -270,6 +282,86 @@ async function sendGrayscale() {
       grayscalePorts.delete(tab.id)
     }
   }
+}
+
+/* Watch-guide tour -------------------------------------------------------- */
+
+// The tour plays the guide's periods back to back in the video's own tab. The
+// content script drives it, because that is where the player is; this side owns
+// the button and the running commentary.
+//
+// It lasts only as long as this panel, the way grayscale focus does and for the
+// same reason: the port below carries the toggle, and its disconnect is what
+// stops a tour whose panel has closed. A panel that is gone cannot offer a way
+// to stop what it started.
+function tourPort(tabId) {
+  const existing = tourPorts.get(tabId)
+  if (existing) return existing
+
+  const port = chrome.tabs.connect(tabId, { name: TOUR_PORT })
+  port.onMessage.addListener(onTourMessage)
+  port.onDisconnect.addListener(() => {
+    if (tourPorts.get(tabId) === port) tourPorts.delete(tabId)
+    forgetTours(tabId)
+  })
+  tourPorts.set(tabId, port)
+  return port
+}
+
+// Every start and every stop is answered, so the button follows what actually
+// happened in the tab rather than what was asked for.
+function onTourMessage(message) {
+  const run = runs.get(message?.videoId)
+  if (!run) return
+
+  run.tour = {
+    running: Boolean(message.running),
+    pending: false,
+    index: Number(message.index) || 0,
+    total: Number(message.total) || 0,
+    label: typeof message.label === "string" ? message.label : "",
+    reason: typeof message.reason === "string" ? message.reason : "",
+  }
+  if (shownVideoId === run.video.videoId) renderTour(run)
+}
+
+// The tab dropped the port, so whatever it was playing, it is not playing now.
+function forgetTours(tabId) {
+  for (const run of runs.values()) {
+    if (run.video.tabId !== tabId) continue
+    if (!run.tour.running && !run.tour.pending) continue
+
+    const unanswered = run.tour.pending
+    run.tour = { ...IDLE_TOUR }
+    if (shownVideoId !== run.video.videoId) continue
+
+    renderTour(run)
+    // A tour that was already playing says so by the button flipping back. A
+    // click that never reached the tab has nothing to show for itself.
+    if (unanswered) showNotice("Could not reach the video tab. Reopen the video and try again.")
+  }
+}
+
+function describeTour(run) {
+  const { tour, momentCount } = run
+  if (tour.running && tour.total) return `Playing ${tour.index + 1} of ${tour.total}: ${tour.label}`
+  if (tour.reason === "finished") {
+    return `Played all ${tour.total} ${tour.total === 1 ? "moment" : "moments"}.`
+  }
+  if (tour.reason === "unavailable") return "That tab could not play the moments."
+  if (!momentCount) return "No watch-guide moments found for the player."
+
+  // How long the tour runs is the number the guide is really promising, and it
+  // belongs next to the button rather than only inside the brief.
+  const total = run.tourSeconds ? ` · ${formatElapsed(Math.round(run.tourSeconds))} of video` : ""
+  return `${momentCount} ${momentCount === 1 ? "moment" : "moments"} marked on the player${total}.`
+}
+
+function renderTour(run) {
+  ui.tour.textContent = run.tour.running ? "Stop" : "Play moments"
+  ui.tour.disabled = run.tour.pending || run.momentCount === 0
+  ui.tour.dataset.running = String(run.tour.running)
+  ui.markerStatus.textContent = describeTour(run)
 }
 
 /* State ------------------------------------------------------------------- */
@@ -464,6 +556,8 @@ async function distill() {
     settings: { ...settings },
     brief: null,
     momentCount: 0,
+    tourSeconds: 0,
+    tour: { ...IDLE_TOUR },
     error: "",
   }
   runs.set(video.videoId, run)
@@ -491,6 +585,9 @@ async function distill() {
     run.state = "success"
     run.brief = payload
     run.momentCount = moments.length
+    // The same plan the content script will build, only so the panel can say
+    // how long the tour runs before anyone commits to watching it.
+    run.tourSeconds = tourSeconds(tourPlan(moments, { duration: video.duration }))
     // The markers go to the run's own tab, whichever tab is in front now.
     await sendMoments(video, moments)
   } catch (error) {
@@ -529,28 +626,79 @@ function renderTimings(payload) {
   ui.timings.replaceChildren(...rows, config)
 }
 
+// The call, before the brief that argues for it. A glance at the number decides
+// whether the sections below are worth opening at all.
+function renderVerdict(summary) {
+  const verdict = extractVerdict(summary)
+  if (!verdict) {
+    ui.verdict.replaceChildren()
+    ui.verdict.hidden = true
+    return
+  }
+
+  const card = document.createElement("div")
+  card.className = `verdict verdict-${verdict.tone}`
+
+  const badge = document.createElement("div")
+  badge.className = "verdict-badge"
+  const score = document.createElement("span")
+  score.className = "verdict-score"
+  score.textContent = String(verdict.score)
+  const scale = document.createElement("span")
+  scale.className = "verdict-scale"
+  scale.textContent = "/100"
+  badge.append(score, scale)
+
+  const body = document.createElement("div")
+  const label = document.createElement("p")
+  label.className = "verdict-label"
+  label.textContent = verdict.label
+  const note = document.createElement("span")
+  note.className = "verdict-note"
+  note.textContent = ` · ${verdict.note}`
+  label.append(note)
+  body.append(label)
+
+  if (verdict.reason) {
+    const reason = document.createElement("p")
+    reason.className = "verdict-reason"
+    reason.textContent = verdict.reason
+    body.append(reason)
+  }
+
+  card.append(badge, body)
+  ui.verdict.replaceChildren(card)
+  ui.verdict.hidden = false
+}
+
 function renderSections(payload) {
-  const articles = splitSummary(payload.summary).map((section, index) => {
-    const article = document.createElement("article")
-    article.className = "section"
+  renderVerdict(payload.summary)
 
-    const number = document.createElement("p")
-    number.className = "section-number"
-    number.textContent = String(index + 1).padStart(2, "0")
+  // The verdict is rendered as the badge above, so leaving it in the list would
+  // print it twice and push every other section's number up by one.
+  const articles = splitSummary(payload.summary)
+    .filter((section) => !isVerdictHeading(section.title))
+    .map((section, index) => {
+      const article = document.createElement("article")
+      article.className = "section"
 
-    const body = document.createElement("div")
-    const heading = document.createElement("h3")
-    heading.className = "section-title"
-    heading.textContent = section.title
+      const number = document.createElement("p")
+      number.className = "section-number"
+      number.textContent = String(index + 1).padStart(2, "0")
 
-    const markdown = document.createElement("div")
-    markdown.className = "summary-markdown"
-    markdown.innerHTML = renderMarkdown(section.content)
+      const body = document.createElement("div")
+      const heading = document.createElement("h3")
+      heading.className = "section-title"
+      heading.textContent = section.title
 
-    body.append(heading, markdown)
-    article.append(number, body)
-    return article
-  })
+      const markdown = document.createElement("div")
+      markdown.className = "summary-markdown"
+      markdown.innerHTML = renderMarkdown(section.content)
+
+      body.append(heading, markdown)
+      article.append(number, body)
+      return article
+    })
 
   ui.sections.replaceChildren(...articles)
   // Asynchronous, because mermaid is only loaded once a brief actually has a
@@ -559,7 +707,7 @@ function renderSections(payload) {
 }
 
 function renderResult(run) {
-  const { brief: payload, momentCount, video } = run
+  const { brief: payload, video } = run
 
   // The video's own name heads the brief: the panel outlives the tab that made
   // it, so by the time it is read the thumbnail above may be another video.
@@ -571,9 +719,7 @@ function renderResult(run) {
   ui.openVideo.href = payload.video_url
   ui.notice.replaceChildren()
   ui.copy.textContent = "Copy"
-  ui.markerStatus.textContent = momentCount
-    ? `${momentCount} ${momentCount === 1 ? "moment" : "moments"} marked on the player.`
-    : "No watch-guide moments found for the player."
+  renderTour(run)
 
   renderTimings(payload)
   renderSections(payload)
@@ -705,6 +851,29 @@ ui.grayscaleToggle.addEventListener("click", async () => {
 // "System" has to keep tracking the OS while the panel is open.
 window.matchMedia(DARK_MEDIA_QUERY).addEventListener("change", () => {
   if (themeMode === "system") renderTheme()
+})
+
+ui.tour.addEventListener("click", () => {
+  const run = shownRun()
+  if (!run?.brief || !run.momentCount) return
+
+  const running = run.tour.running
+  try {
+    tourPort(run.video.tabId).postMessage({
+      action: running ? "stop" : "start",
+      videoId: run.video.videoId,
+    })
+  } catch {
+    tourPorts.delete(run.video.tabId)
+    showNotice("Could not reach the video tab. Reopen the video and try again.")
+    return
+  }
+
+  // The label holds still until the tab answers, so it never claims a tour that
+  // did not start. Disabling it in the meantime is what keeps an impatient
+  // second click from starting the same tour twice.
+  run.tour = { ...IDLE_TOUR, running, pending: true }
+  renderTour(run)
 })
 
 ui.distill.addEventListener("click", distill)

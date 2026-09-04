@@ -34,7 +34,7 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["grayscale.js"],
+      "resources": ["grayscale.js", "tour.js"],
       "matches": ["https://www.youtube.com/*"]
     }
   ]
